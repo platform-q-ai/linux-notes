@@ -1,3 +1,6 @@
 /target
 Cargo.lock.orig
 *.swp
+__pycache__/
+*.pyc
+rusty-notes.db*

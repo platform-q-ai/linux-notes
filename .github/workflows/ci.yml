@@ -31,3 +31,44 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test
         run: cargo test --workspace
+
+  architecture-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Architecture check (positive)
+        # Dependency-boundary gate (issue #2, F9): parses `cargo metadata`
+        # against docs/architecture-target.md — inward-only edges, no
+        # test-support in the production graph, no application<->test-support
+        # dev-dependency cycle. Fails the job on any violation.
+        run: |
+          cargo metadata --no-deps --format-version 1 > /tmp/workspace-metadata.json
+          python3 scripts/arch-check.py --metadata /tmp/workspace-metadata.json
+
+      - name: Architecture check (negative)
+        # Prove the check can actually fail (validation gate 5): corrupt a
+        # throwaway copy of the metadata — flip `desktop`'s dev-dependency on
+        # `test-support` into a production dependency (the F8 regression the
+        # check exists to prevent) and add an outward `domain -> desktop` edge
+        # — then assert the script exits non-zero.
+        run: |
+          cargo metadata --no-deps --format-version 1 > /tmp/real.json
+          jq '
+            (.packages[] | select(.name=="rusty-notes-desktop")
+               | .dependencies[] | select(.name=="rusty-notes-test-support")
+               | .kind) = ""
+            | (.packages[] | select(.name=="rusty-notes-domain")
+               | .dependencies) += [ { "name": "rusty-notes-desktop",
+                                       "kind": null,
+                                       "path": "crates/desktop" } ]
+          ' /tmp/real.json > /tmp/violating.json
+          if python3 scripts/arch-check.py --metadata /tmp/violating.json; then
+            echo "::error::architecture check accepted a deliberate boundary violation"
+            exit 1
+          fi
+          echo "architecture check correctly FAILED on the deliberate violation"

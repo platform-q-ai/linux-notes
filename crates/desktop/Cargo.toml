@@ -1,0 +1,22 @@
+[package]
+name = "rusty-notes-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rusty-notes-desktop"
+path = "src/main.rs"
+
+[dependencies]
+rusty-notes-domain = { workspace = true }
+rusty-notes-application = { workspace = true }
+rusty-notes-presentation = { workspace = true }
+rusty-notes-system = { workspace = true }
+rusty-notes-sqlite = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
+
+[dev-dependencies]
+rusty-notes-test-support = { workspace = true }
+tempfile = { workspace = true }

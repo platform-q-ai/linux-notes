@@ -1,0 +1,11 @@
+[package]
+name = "rusty-notes-test-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Test-only support crate: everything here is linked into dev-dependency graphs
+# of adapter/desktop crates, never into the production graph (issue #2, F8/F12).
+rusty-notes-application = { workspace = true }
+rusty-notes-domain = { workspace = true }

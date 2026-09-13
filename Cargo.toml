@@ -1,10 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "domain",
-    "application",
-    "infrastructure/sqlite",
-    "app/desktop",
+    "crates/domain",
+    "crates/application",
+    "crates/adapters/sqlite",
+    "crates/adapters/presentation",
+    "crates/adapters/system",
+    "crates/desktop",
+    "crates/test-support",
 ]
 
 [workspace.package]
@@ -14,11 +17,17 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # Inner core: zero in-workspace deps, std only.
-rusty-notes-domain = { path = "domain" }
-rusty-notes-application = { path = "application" }
+rusty-notes-domain = { path = "crates/domain" }
+rusty-notes-application = { path = "crates/application" }
 
 # Outer adapters.
-rusty-notes-sqlite = { path = "infrastructure/sqlite" }
+rusty-notes-sqlite = { path = "crates/adapters/sqlite" }
+rusty-notes-presentation = { path = "crates/adapters/presentation" }
+rusty-notes-system = { path = "crates/adapters/system" }
+
+# Test-only support: dev-dependencies ONLY — must never appear in a production
+# dependency graph (the CI architecture check enforces this).
+rusty-notes-test-support = { path = "crates/test-support" }
 
 # GUI stack — pinned exactly (ADR-0001): egui/eframe 0.x breaks between minors,
 # so upgrades are deliberate single-purpose chores, never loose semver drift.

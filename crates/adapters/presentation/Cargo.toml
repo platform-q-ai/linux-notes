@@ -1,0 +1,8 @@
+[package]
+name = "rusty-notes-presentation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rusty-notes-domain = { workspace = true }

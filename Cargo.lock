@@ -2694,12 +2694,23 @@ dependencies = [
  "egui",
  "rusty-notes-application",
  "rusty-notes-domain",
+ "rusty-notes-presentation",
  "rusty-notes-sqlite",
+ "rusty-notes-system",
+ "rusty-notes-test-support",
+ "tempfile",
 ]
 
 [[package]]
 name = "rusty-notes-domain"
 version = "0.1.0"
+
+[[package]]
+name = "rusty-notes-presentation"
+version = "0.1.0"
+dependencies = [
+ "rusty-notes-domain",
+]
 
 [[package]]
 name = "rusty-notes-sqlite"
@@ -2708,7 +2719,24 @@ dependencies = [
  "rusqlite",
  "rusty-notes-application",
  "rusty-notes-domain",
+ "rusty-notes-test-support",
  "tempfile",
+]
+
+[[package]]
+name = "rusty-notes-system"
+version = "0.1.0"
+dependencies = [
+ "rusty-notes-application",
+ "rusty-notes-domain",
+]
+
+[[package]]
+name = "rusty-notes-test-support"
+version = "0.1.0"
+dependencies = [
+ "rusty-notes-application",
+ "rusty-notes-domain",
 ]
 
 [[package]]
