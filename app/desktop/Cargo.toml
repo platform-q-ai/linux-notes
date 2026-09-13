@@ -1,0 +1,13 @@
+[package]
+name = "rusty-notes-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rusty-notes-domain = { workspace = true }
+rusty-notes-application = { workspace = true }
+rusty-notes-sqlite = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
+

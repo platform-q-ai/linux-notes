@@ -1,0 +1,13 @@
+[package]
+name = "rusty-notes-sqlite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rusty-notes-domain = { workspace = true }
+rusty-notes-application = { workspace = true }
+rusqlite = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+    "domain",
+    "application",
+    "infrastructure/sqlite",
+    "app/desktop",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Inner core: zero in-workspace deps, std only.
+rusty-notes-domain = { path = "domain" }
+rusty-notes-application = { path = "application" }
+
+# Outer adapters.
+rusty-notes-sqlite = { path = "infrastructure/sqlite" }
+
+# GUI stack — pinned exactly (ADR-0001): egui/eframe 0.x breaks between minors,
+# so upgrades are deliberate single-purpose chores, never loose semver drift.
+eframe = "=0.36.2"
+egui = "=0.36.2"
+
+# Persistence (ADR-0002): bundled SQLite removes the distro-build variable and
+# guarantees the FTS5 canary (ADR-0003) runs against a known-good build.
+rusqlite = { version = "0.37", features = ["bundled"] }
+
+serde = { version = "1", features = ["derive"] }
+anyhow = "1"
+tempfile = "3"  # dev-dependency only (test fixtures)
+
+[profile.dev]
+debug = 1
