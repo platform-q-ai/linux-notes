@@ -1,14 +1,15 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! rusty-notes application layer: ports, use cases, in-memory adapters,
+//! shared contract suite, presenter view models.
+//!
+//! Depends only on the domain crate (dependency arrows point inward). No rusqlite,
+//! no egui, no async runtime.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod contract;
+pub mod error;
+pub mod memory;
+pub mod ports;
+pub mod presenter;
+pub mod use_cases;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use error::{AppError, RepoError, SearchError};
+pub use ports::{Clock, Ids, NoteRepository, SearchService};
