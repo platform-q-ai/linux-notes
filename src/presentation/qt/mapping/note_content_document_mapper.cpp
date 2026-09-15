@@ -79,18 +79,31 @@ std::optional<domain::ChecklistItem> parseChecklistLine(const QString& text) {
   return item;
 }
 
+bool attachmentIdUsable(const QString& id) {
+  // Domain opaque-safe gate: forged markers/anchors with path separators,
+  // traversal, absolute forms, or non att- tokens must not become
+  // AttachmentRefBlock (which would later hit store get/remove/purge GC).
+  return domain::AttachmentId::is_opaque_safe(id.toStdString());
+}
+
 std::optional<domain::AttachmentRefBlock> parseAttachmentPlain(
     const QString& text) {
   // Legacy/plain form written by older mapper builds:
   // [attachment:<id> <display name>]
+  // Id capture still allows broad tokens so we can *detect* forgeries; only
+  // opaque-safe ids become structured attachment refs.
   static const QRegularExpression re(
       QStringLiteral(R"(^\s*\[attachment:([^\s\]]+)(?:\s+([^\]]*?))?\s*\]\s*$)"));
   const auto m = re.match(text);
   if (!m.hasMatch()) {
     return std::nullopt;
   }
+  const QString id = m.captured(1);
+  if (!attachmentIdUsable(id)) {
+    return std::nullopt;
+  }
   domain::AttachmentRefBlock att;
-  att.attachment_id = domain::AttachmentId{m.captured(1).toStdString()};
+  att.attachment_id = domain::AttachmentId{id.toStdString()};
   att.display_name = m.captured(2).trimmed().toStdString();
   return att;
 }
@@ -100,12 +113,13 @@ std::optional<domain::AttachmentRefBlock> attachmentFromBlock(
   const QTextBlockFormat bf = block.blockFormat();
   if (bf.intProperty(kPropStructuredKind) == kKindAttachment) {
     const QString id = bf.stringProperty(kPropAttachmentId);
-    if (!id.isEmpty()) {
+    if (!id.isEmpty() && attachmentIdUsable(id)) {
       domain::AttachmentRefBlock att;
       att.attachment_id = domain::AttachmentId{id.toStdString()};
       att.display_name = block.text().toStdString();
       return att;
     }
+    // Forged/unsafe structured property: fall through; do not trust id.
   }
 
   QString anchor_id;
@@ -129,7 +143,7 @@ std::optional<domain::AttachmentRefBlock> attachmentFromBlock(
       label += frag.text();
     }
   }
-  if (!anchor_id.isEmpty()) {
+  if (!anchor_id.isEmpty() && attachmentIdUsable(anchor_id)) {
     domain::AttachmentRefBlock att;
     att.attachment_id = domain::AttachmentId{anchor_id.toStdString()};
     att.display_name = label.toStdString();

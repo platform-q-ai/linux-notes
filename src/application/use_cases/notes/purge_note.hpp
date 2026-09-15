@@ -30,11 +30,12 @@ public:
           {ErrorKind::ValidationFailed,
            "permanent delete requires note to be in trash first"});
     }
-    // Collect attachment ids before row is gone.
+    // Collect attachment ids before row is gone. Only opaque-safe tokens are
+    // eligible for FS GC — forged/traversal ids must never reach the store.
     std::set<std::string> attachment_ids;
     for (const auto& block : loaded.value().content.blocks()) {
       if (const auto* a = std::get_if<domain::AttachmentRefBlock>(&block)) {
-        if (!a->attachment_id.empty()) {
+        if (a->attachment_id.is_opaque_safe()) {
           attachment_ids.insert(a->attachment_id.value());
         }
       }

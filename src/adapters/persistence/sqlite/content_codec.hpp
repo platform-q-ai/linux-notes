@@ -150,8 +150,12 @@ inline domain::NoteContent decode_content(const std::string& blob) {
         in.clear();
         in.seekg(pos);
       }
-      blocks.emplace_back(domain::AttachmentRefBlock{
-          domain::AttachmentId{std::move(id)}, std::move(name)});
+      // Deserialized ATT rows are untrusted for FS paths; only opaque-safe
+      // tokens become AttachmentRefBlock (domain validity alone is insufficient).
+      if (domain::AttachmentId::is_opaque_safe(id)) {
+        blocks.emplace_back(domain::AttachmentRefBlock{
+            domain::AttachmentId{std::move(id)}, std::move(name)});
+      }
     } else {
       skip_record_eol(in);
     }

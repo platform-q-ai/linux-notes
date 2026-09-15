@@ -1,27 +1,47 @@
 #pragma once
+#include "application/ports/attachments/attachment_store.hpp"
 #include "application/ports/clock.hpp"
 #include "application/ports/id_source.hpp"
 #include "application/ports/notes/note_reader.hpp"
 #include "application/ports/notes/note_writer.hpp"
 #include "application/result.hpp"
 #include "domain/notes/note.hpp"
+#include "domain/notes/note_content.hpp"
 
 #include <array>
 #include <cstdint>
 #include <random>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace notes::application {
 
 // Application owns timestamps, revision bump, and keep-both on RevisionConflict.
+//
+// Attachment lifetime policy (keep-both):
+// When allow_keep_both forks a note that references attachment blobs, those
+// AttachmentRefBlock ids are deep-copied through AttachmentStore (get + put)
+// onto the new note. Each note therefore owns distinct blob ids. PurgeNote and
+// removeAttachment may delete blobs referenced by the note being removed
+// without destroying the survivor's attachments. This is preferred over a
+// durable refcount table (out of scope) and over "never delete" retention.
+// If AttachmentStore is not wired, keep-both still forks the note row but
+// attachment ids remain shared (test-only / degraded); production composition
+// always supplies the store.
 class SaveNote {
 public:
   // id_source optional: when null, a process CSPRNG token is used (restart/multi-
   // instance safe). Inject a custom IdSource for tests or host-provided identity.
+  // attachments optional: when non-null, keep-both deep-copies attachment blobs.
   SaveNote(NoteWriter& writer, NoteReader& reader, Clock& clock,
-           IdSource* id_source = nullptr)
-      : writer_(writer), reader_(reader), clock_(clock), id_source_(id_source) {}
+           IdSource* id_source = nullptr,
+           AttachmentStore* attachments = nullptr)
+      : writer_(writer),
+        reader_(reader),
+        clock_(clock),
+        id_source_(id_source),
+        attachments_(attachments) {}
 
   struct Request {
     domain::Note note;           // includes base revision
@@ -62,8 +82,14 @@ public:
     if (incoming.title.find("(conflict)") == std::string::npos) {
       incoming.title += " (conflict)";
     }
+
+    if (auto deep = deep_copy_attachments(incoming); !deep) {
+      return Result<Outcome>::fail(deep.error());
+    }
+
     auto created = writer_.save(incoming);
     if (!created) {
+      // Best-effort: leave any newly put blobs; purge/orphan GC can reclaim later.
       return Result<Outcome>::fail(created.error());
     }
     Outcome out;
@@ -75,6 +101,56 @@ public:
   }
 
 private:
+  // Rewrite AttachmentRefBlock ids on `note` to freshly put blobs cloned from
+  // the previous ids. No-op when attachments_ is null or content has no refs.
+  [[nodiscard]] Result<void> deep_copy_attachments(domain::Note& note) {
+    if (attachments_ == nullptr) {
+      return Result<void>::ok();
+    }
+    auto blocks = note.content.blocks();
+    bool any = false;
+    for (auto& block : blocks) {
+      auto* ref = std::get_if<domain::AttachmentRefBlock>(&block);
+      if (ref == nullptr || ref->attachment_id.empty()) {
+        continue;
+      }
+      if (!ref->attachment_id.is_opaque_safe()) {
+        // Skip unsafe tokens; do not attempt FS clone.
+        continue;
+      }
+      auto bytes = attachments_->get(ref->attachment_id);
+      if (!bytes) {
+        // Missing source blob: drop the ref rather than share a dead id.
+        // Keep display name as plain paragraph so content is not silent-empty.
+        domain::ParagraphBlock para;
+        para.spans.push_back(domain::TextSpan{
+            ref->display_name.empty() ? std::string{"[missing attachment]"}
+                                      : ref->display_name,
+            false, false, false});
+        block = std::move(para);
+        any = true;
+        continue;
+      }
+      const std::string name =
+          ref->display_name.empty() ? std::string{"attachment.bin"}
+                                    : ref->display_name;
+      auto put = attachments_->put(note.id, name, "application/octet-stream",
+                                   bytes.value());
+      if (!put) {
+        return Result<void>::fail(put.error());
+      }
+      ref->attachment_id = put.value().id;
+      if (ref->display_name.empty()) {
+        ref->display_name = put.value().file_name;
+      }
+      any = true;
+    }
+    if (any) {
+      note.content = domain::NoteContent{std::move(blocks)};
+    }
+    return Result<void>::ok();
+  }
+
   [[nodiscard]] std::string next_token() {
     if (id_source_ != nullptr) {
       return id_source_->next_unique_token();
@@ -117,6 +193,7 @@ private:
   NoteReader& reader_;
   Clock& clock_;
   IdSource* id_source_{nullptr};
+  AttachmentStore* attachments_{nullptr};
 };
 
 }  // namespace notes::application

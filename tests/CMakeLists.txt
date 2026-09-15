@@ -20,6 +20,13 @@ add_executable(test_notes_save_note application/use_cases/save_note_test.cpp)
 target_link_libraries(test_notes_save_note PRIVATE notes_app notes_test_support)
 add_test(NAME test_notes_save_note COMMAND test_notes_save_note)
 
+add_executable(test_notes_keep_both_attachment
+  application/use_cases/keep_both_attachment_test.cpp)
+target_link_libraries(test_notes_keep_both_attachment PRIVATE
+  notes_app notes_test_support)
+add_test(NAME test_notes_keep_both_attachment
+         COMMAND test_notes_keep_both_attachment)
+
 add_executable(test_notes_store_contract contracts/note_store_contract_main.cpp)
 target_link_libraries(test_notes_store_contract PRIVATE notes_adapters_sqlite notes_test_support)
 add_test(NAME test_notes_store_contract COMMAND test_notes_store_contract)
@@ -165,4 +172,58 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/adapters/migration_v3_integrity_test.cpp)
     notes_adapters_sqlite notes_test_support)
   add_test(NAME test_notes_migration_v3_integrity
            COMMAND test_notes_migration_v3_integrity)
+endif()
+
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/adapters/filesystem_attachment_store_test.cpp)
+  add_executable(test_notes_filesystem_attachment_store
+    adapters/filesystem_attachment_store_test.cpp)
+  target_link_libraries(test_notes_filesystem_attachment_store PRIVATE
+    notes_adapters_attachments notes_test_support)
+  add_test(NAME test_notes_filesystem_attachment_store
+           COMMAND test_notes_filesystem_attachment_store)
+endif()
+
+# PR#4 remediation: trash resurrection, checklist plain/doc offsets, flush reentrancy.
+if(TARGET notes_presentation)
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/presentation/test_trash_editor_lifecycle.cpp)
+    add_executable(test_notes_trash_editor_lifecycle
+      presentation/test_trash_editor_lifecycle.cpp)
+    target_include_directories(test_notes_trash_editor_lifecycle PRIVATE
+      ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
+    target_link_libraries(test_notes_trash_editor_lifecycle PRIVATE
+      notes_presentation notes_app notes_test_support notes_catch2
+      Qt6::Core Qt6::Test)
+    add_test(NAME test_notes_trash_editor_lifecycle
+             COMMAND test_notes_trash_editor_lifecycle)
+    set_tests_properties(test_notes_trash_editor_lifecycle PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LC_ALL=C.UTF-8")
+  endif()
+
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/presentation/test_checklist_offset_mapping.cpp)
+    add_executable(test_notes_checklist_offset_mapping
+      presentation/test_checklist_offset_mapping.cpp)
+    target_include_directories(test_notes_checklist_offset_mapping PRIVATE
+      ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
+    target_link_libraries(test_notes_checklist_offset_mapping PRIVATE
+      notes_presentation notes_app notes_test_support notes_catch2
+      Qt6::Core Qt6::Gui Qt6::Test)
+    add_test(NAME test_notes_checklist_offset_mapping
+             COMMAND test_notes_checklist_offset_mapping)
+    set_tests_properties(test_notes_checklist_offset_mapping PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LC_ALL=C.UTF-8")
+  endif()
+
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/presentation/test_flush_reentrancy.cpp)
+    add_executable(test_notes_flush_reentrancy
+      presentation/test_flush_reentrancy.cpp)
+    target_include_directories(test_notes_flush_reentrancy PRIVATE
+      ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
+    target_link_libraries(test_notes_flush_reentrancy PRIVATE
+      notes_presentation notes_app notes_test_support notes_catch2
+      Qt6::Core Qt6::Test)
+    add_test(NAME test_notes_flush_reentrancy
+             COMMAND test_notes_flush_reentrancy)
+    set_tests_properties(test_notes_flush_reentrancy PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LC_ALL=C.UTF-8")
+  endif()
 endif()

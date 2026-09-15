@@ -185,7 +185,7 @@ TEST_CASE("B/I/U paragraph formatting still roundtrips with structured neighbors
   p.spans.push_back(TextSpan{" Under", false, false, true});
 
   ChecklistBlock checks{std::vector<ChecklistItem>{ChecklistItem{false, "item"}}};
-  AttachmentRefBlock att{AttachmentId{"id-1"}, "file.bin"};
+  AttachmentRefBlock att{AttachmentId{"att-1"}, "file.bin"};
 
   NoteContent content{std::vector<ContentBlock>{p, checks, att}};
   QTextDocument doc;
@@ -207,7 +207,7 @@ TEST_CASE("B/I/U paragraph formatting still roundtrips with structured neighbors
   REQUIRE(std::get_if<ChecklistBlock>(&back.blocks()[1]) != nullptr);
   REQUIRE(std::get_if<AttachmentRefBlock>(&back.blocks()[2]) != nullptr);
   REQUIRE(std::get_if<AttachmentRefBlock>(&back.blocks()[2])->attachment_id.value() ==
-          "id-1");
+          "att-1");
 }
 
 TEST_CASE("legacy plain attachment marker is recovered",
@@ -216,7 +216,7 @@ TEST_CASE("legacy plain attachment marker is recovered",
   QTextCursor cur(&doc);
   cur.insertText(QStringLiteral("before"));
   cur.insertBlock();
-  cur.insertText(QStringLiteral("[attachment:legacy-9 my doc.pdf]"));
+  cur.insertText(QStringLiteral("[attachment:att-legacy-9 my doc.pdf]"));
   cur.insertBlock();
   cur.insertText(QStringLiteral("[ ] todo"));
   cur.insertBlock();
@@ -227,11 +227,31 @@ TEST_CASE("legacy plain attachment marker is recovered",
   REQUIRE(std::get_if<ParagraphBlock>(&back.blocks()[0]) != nullptr);
   const auto* att = std::get_if<AttachmentRefBlock>(&back.blocks()[1]);
   REQUIRE(att != nullptr);
-  REQUIRE(att->attachment_id.value() == "legacy-9");
+  REQUIRE(att->attachment_id.value() == "att-legacy-9");
   REQUIRE(att->display_name == "my doc.pdf");
   const auto* checks = std::get_if<ChecklistBlock>(&back.blocks()[2]);
   REQUIRE(checks != nullptr);
   REQUIRE(checks->items().size() == 2);
   REQUIRE_FALSE(checks->items()[0].done);
   REQUIRE(checks->items()[1].done);
+}
+
+TEST_CASE("forged attachment markers with traversal ids stay plain text",
+          "[mapper][security]") {
+  QTextDocument doc;
+  QTextCursor cur(&doc);
+  cur.insertText(QStringLiteral("[attachment:../outside/leak secret]"));
+  cur.insertBlock();
+  cur.insertText(QStringLiteral("[attachment:/tmp/x bin]"));
+  cur.insertBlock();
+  cur.insertText(QStringLiteral("[attachment:att-ok safe name]"));
+
+  const NoteContent back = NoteContentDocumentMapper::fromDocument(doc);
+  REQUIRE(back.blocks().size() == 3);
+  REQUIRE(std::get_if<ParagraphBlock>(&back.blocks()[0]) != nullptr);
+  REQUIRE(std::get_if<ParagraphBlock>(&back.blocks()[1]) != nullptr);
+  const auto* att = std::get_if<AttachmentRefBlock>(&back.blocks()[2]);
+  REQUIRE(att != nullptr);
+  REQUIRE(att->attachment_id.value() == "att-ok");
+  REQUIRE(att->display_name == "safe name");
 }

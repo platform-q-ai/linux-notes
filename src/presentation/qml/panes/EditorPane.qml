@@ -16,6 +16,7 @@ Item {
             spacing: 4
             enabled: root.editorVm && root.editorVm.noteId
                      && root.editorVm.noteId.length > 0
+                     && !(root.editorVm.noteTrashed)
 
             ToolButton {
                 text: "B"
@@ -123,11 +124,14 @@ Item {
                 selectByMouse: true
                 readOnly: !(root.editorVm && root.editorVm.noteId
                             && root.editorVm.noteId.length > 0)
+                          || !!(root.editorVm && root.editorVm.noteTrashed)
                 placeholderText: qsTr("Select or create a note")
                 property bool suppress: false
 
                 function applyInline(kind) {
                     if (!root.editorVm)
+                        return
+                    if (root.editorVm.noteTrashed)
                         return
                     if (selectionStart === selectionEnd)
                         return
@@ -142,21 +146,20 @@ Item {
                     onDoubleClicked: function (mouse) {
                         if (!root.editorVm)
                             return
-                        // Map click to plain-text offset approximately via cursor.
+                        if (root.editorVm.noteTrashed)
+                            return
+                        // QTextDocument position from positionAt — not plain_text.
                         editor.forceActiveFocus()
                         const pos = editor.positionAt(mouse.x, mouse.y)
                         editor.cursorPosition = pos
-                        // Use plain text position: strip is imperfect for rich text,
-                        // so prefer cursorPosition which tracks document chars.
-                        if (root.editorVm.toggleChecklistAtPlainOffset) {
-                            // plain_text offsets differ from QTextDocument positions;
-                            // use line-based plain from VM plainText property.
-                            const plain = root.editorVm.plainText || ""
-                            // Best-effort: find nearest checklist line to cursor's line.
-                            const docPlain = editor.getText(0, editor.length)
-                            const before = docPlain.substring(0, pos)
-                            const plainApprox = before.length
-                            if (root.editorVm.toggleChecklistAtPlainOffset(plainApprox)) {
+                        if (root.editorVm.toggleChecklistAtDocumentPosition) {
+                            if (root.editorVm.toggleChecklistAtDocumentPosition(pos)) {
+                                mouse.accepted = true
+                                return
+                            }
+                        } else if (root.editorVm.toggleChecklistAtPlainOffset) {
+                            // Legacy fallback only; plain offsets ≠ document coords.
+                            if (root.editorVm.toggleChecklistAtPlainOffset(pos)) {
                                 mouse.accepted = true
                                 return
                             }

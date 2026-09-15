@@ -37,6 +37,8 @@ class EditorViewModel : public QObject {
   Q_PROPERTY(bool canRedo READ canRedo NOTIFY undoStateChanged)
   Q_PROPERTY(bool structuredOpsAvailable READ structuredOpsAvailable
                  NOTIFY structuredOpsChanged)
+  // Soft-delete view: true when the open note is in trash (not editable/saveable).
+  Q_PROPERTY(bool noteTrashed READ noteTrashed NOTIFY noteTrashedChanged)
 
 public:
   // toggle/attach/store may be null (tests / reduced shells). Production root
@@ -66,10 +68,14 @@ public:
   [[nodiscard]] bool structuredOpsAvailable() const {
     return toggle_checklist_ != nullptr || attach_file_ != nullptr;
   }
+  [[nodiscard]] bool noteTrashed() const { return trashed_at_ms_ > 0; }
 
   Q_INVOKABLE void openNote(const QString& noteId);
   Q_INVOKABLE void loadNote(const QString& noteId) { openNote(noteId); }
   Q_INVOKABLE void closeNote();
+  // Drop the open note without flushing. Used when permanent purge must not
+  // resurrect trash via closeNote → flush → noteSnapshot (trashed_at defaults 0).
+  Q_INVOKABLE void discardEditorWithoutFlush();
   Q_INVOKABLE void saveNow();
   Q_INVOKABLE void markUndoRedo(bool canUndo, bool canRedo);
   Q_INVOKABLE void setPlainText(const QString& plain);
@@ -81,8 +87,11 @@ public:
   Q_INVOKABLE void insertChecklist();
   Q_INVOKABLE void toggleChecklistItem(int blockIndex, int itemIndex);
   // Toggle the checklist item whose marker contains plain-text offset.
+  // Offsets must match domain NoteContent::plain_text() (incl. [attachment:…]).
   // Returns true if a checklist marker was found and toggled.
   Q_INVOKABLE bool toggleChecklistAtPlainOffset(int plainOffset);
+  // Toggle using QTextDocument coordinates (QML TextArea positionAt), not plain_text.
+  Q_INVOKABLE bool toggleChecklistAtDocumentPosition(int documentPosition);
   Q_INVOKABLE void attachLocalFile(const QString& localPath);
   Q_INVOKABLE void removeAttachment(const QString& attachmentId);
   // Attachment ids currently in editor content (for UI list / delete).
@@ -111,6 +120,7 @@ signals:
              bool pinned);
   void keepBothNotice(const QString& message);
   void attachmentChanged();
+  void noteTrashedChanged();
 
 private:
   void setDirty(bool v);
@@ -125,6 +135,8 @@ private:
   void applySaveSuccess(const application::SaveNote::Outcome& out,
                         const QString& html_snapshot);
   void applyLoadedNote(const domain::Note& note, bool mark_clean);
+  void assignTrashMetadata(const domain::Note& note);
+  [[nodiscard]] bool refuseTrashedMutation(const char* action);
   [[nodiscard]] domain::NoteContent contentFromEditor() const;
   [[nodiscard]] domain::Note noteSnapshot() const;
   static std::string title_from_plain(const QString& plain);
@@ -144,6 +156,9 @@ private:
   QString plain_;
   qint64 revision_{0};
   qint64 created_at_ms_{0};
+  // Soft-delete metadata must round-trip through noteSnapshot/save.
+  qint64 trashed_at_ms_{0};
+  QString trashed_from_folder_id_;
   bool pinned_{false};
   bool dirty_{false};
   bool saving_{false};
@@ -152,6 +167,8 @@ private:
   bool can_redo_{false};
   bool applying_load_{false};
   bool queued_resave_{false};
+  // Prevent nested close/open/save while a blocking flush runs.
+  bool flushing_{false};
   QString error_;
 
   QTimer* idle_timer_{nullptr};

@@ -12,7 +12,12 @@ jobs:
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
       - name: architecture-check
+        # Entry point delegates to scripts/architecture/architecture_check.sh
+        # (stronger layer rules). Do not point CI at a weaker duplicate.
         run: bash scripts/architecture_check.sh
+      - name: architecture-violation-tests
+        # Fixtures must fail the checker; clean tree must pass. No ignore lists.
+        run: bash scripts/architecture/run_violation_tests.sh
 
   test:
     runs-on: ubuntu-24.04

@@ -57,8 +57,9 @@ public:
 
     create_note_ = std::make_unique<application::CreateNote>(*note_store_, clock_);
     load_note_ = std::make_unique<application::LoadNote>(*note_store_);
-    save_note_ = std::make_unique<application::SaveNote>(*note_store_, *note_store_,
-                                                         clock_, &id_source_);
+    // Attachments store enables keep-both deep-copy of blob ids (lifetime policy).
+    save_note_ = std::make_unique<application::SaveNote>(
+        *note_store_, *note_store_, clock_, &id_source_, attachments_.get());
     list_notes_ = std::make_unique<application::ListNotes>(*note_store_);
     search_notes_ = std::make_unique<application::SearchNotes>(*note_store_);
     // Soft-delete path (DeleteNote == TrashNote semantics).

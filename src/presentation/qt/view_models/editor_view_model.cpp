@@ -6,6 +6,7 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QTextBlock>
 #include <QTextCursor>
 #include <QTextDocument>
 #include <QUrl>
@@ -103,6 +104,7 @@ void EditorViewModel::setError(QString e) {
 
 void EditorViewModel::setPinned(bool pinned) {
   if (pinned_ == pinned) return;
+  if (refuseTrashedMutation("setPinned")) return;
   pinned_ = pinned;
   emit pinnedChanged();
   setDirty(true);
@@ -117,6 +119,7 @@ void EditorViewModel::markUndoRedo(bool canUndo, bool canRedo) {
 }
 
 void EditorViewModel::setPlainText(const QString& plain) {
+  if (refuseTrashedMutation("setPlainText")) return;
   const auto content = NoteContentDocumentMapper::fromPlain(plain);
   setHtml(NoteContentDocumentMapper::toHtml(content));
 }
@@ -133,6 +136,14 @@ void EditorViewModel::setHtml(const QString& html) {
     return;
   }
   if (html_ == html) return;
+  // Trashed notes are read-only: keep last loaded HTML, do not dirty/save.
+  if (noteTrashed() && !note_id_.isEmpty()) {
+    setError(QStringLiteral(
+        "Note is in trash. Restore it before editing or saving."));
+    // Re-emit current html so QML bindings can snap back if needed.
+    emit htmlChanged();
+    return;
+  }
   html_ = html;
   auto content = NoteContentDocumentMapper::fromHtml(html);
   cacheContent(content);
@@ -154,6 +165,7 @@ void EditorViewModel::setHtml(const QString& html) {
 void EditorViewModel::toggleInlineStyle(int selectionStart, int selectionEnd,
                                         const QString& style) {
   if (note_id_.isEmpty()) return;
+  if (refuseTrashedMutation("toggleInlineStyle")) return;
   if (selectionStart < 0 || selectionEnd < selectionStart) return;
 
   QTextDocument doc;
@@ -228,12 +240,37 @@ bool EditorViewModel::is_safe_local_file_path(const QString& path,
   return true;
 }
 
+void EditorViewModel::assignTrashMetadata(const domain::Note& note) {
+  const bool was_trashed = noteTrashed();
+  trashed_at_ms_ = note.trashed_at_ms;
+  if (note.trashed_from_folder_id && !note.trashed_from_folder_id->empty()) {
+    trashed_from_folder_id_ =
+        QString::fromStdString(note.trashed_from_folder_id->value());
+  } else {
+    trashed_from_folder_id_.clear();
+  }
+  if (was_trashed != noteTrashed()) {
+    emit noteTrashedChanged();
+  }
+}
+
+bool EditorViewModel::refuseTrashedMutation(const char* action) {
+  if (!noteTrashed()) {
+    return false;
+  }
+  Q_UNUSED(action);
+  setError(QStringLiteral(
+      "Note is in trash. Restore it before editing or saving."));
+  return true;
+}
+
 void EditorViewModel::applyLoadedNote(const domain::Note& note, bool mark_clean) {
   note_id_ = QString::fromStdString(note.id.value());
   folder_id_ = QString::fromStdString(note.folder_id.value());
   revision_ = note.revision;
   pinned_ = note.pinned;
   created_at_ms_ = note.created_at_ms;
+  assignTrashMetadata(note);
   applying_load_ = true;
   cacheContent(note.content);
   refreshAttachmentLists(note.content);
@@ -259,6 +296,7 @@ void EditorViewModel::applyLoadedNote(const domain::Note& note, bool mark_clean)
 
 void EditorViewModel::insertChecklist() {
   if (note_id_.isEmpty()) return;
+  if (refuseTrashedMutation("insertChecklist")) return;
   auto content = contentFromEditor();
   auto blocks = content.blocks();
   blocks.emplace_back(domain::ChecklistBlock{
@@ -269,24 +307,34 @@ void EditorViewModel::insertChecklist() {
 
 bool EditorViewModel::toggleChecklistAtPlainOffset(int plainOffset) {
   if (note_id_.isEmpty() || plainOffset < 0) return false;
+  if (refuseTrashedMutation("toggleChecklist")) return false;
+  // Walk the same serialization as domain::NoteContent::plain_text().
   const auto content = contentFromEditor();
   int pos = 0;
   int block_index = 0;
+  bool first_block = true;
   for (const auto& block : content.blocks()) {
+    if (!first_block) {
+      ++pos;  // plain_text inserts '\n' between top-level blocks
+    }
+    first_block = false;
+
     if (const auto* check = std::get_if<domain::ChecklistBlock>(&block)) {
       for (std::size_t i = 0; i < check->items().size(); ++i) {
+        if (i > 0) {
+          ++pos;  // newline between checklist items
+        }
         const QString line =
             (check->items()[i].done ? QStringLiteral("[x] ")
                                     : QStringLiteral("[ ] ")) +
             QString::fromStdString(check->items()[i].text);
         const int line_start = pos;
         const int line_end = pos + line.size();
-        // Marker is first 3–4 chars; allow click anywhere on the line.
         if (plainOffset >= line_start && plainOffset <= line_end) {
           toggleChecklistItem(block_index, static_cast<int>(i));
           return true;
         }
-        pos = line_end + 1;  // newline between plain_text lines
+        pos = line_end;
       }
       ++block_index;
       continue;
@@ -294,19 +342,106 @@ bool EditorViewModel::toggleChecklistAtPlainOffset(int plainOffset) {
     if (const auto* para = std::get_if<domain::ParagraphBlock>(&block)) {
       std::string t;
       for (const auto& s : para->spans) t += s.text;
-      pos += static_cast<int>(t.size()) + 1;
+      pos += static_cast<int>(t.size());
       ++block_index;
       continue;
     }
     if (const auto* att = std::get_if<domain::AttachmentRefBlock>(&block)) {
+      // plain_text emits "[attachment:<display_or_id>]" — not bare label.
       const std::string label =
           att->display_name.empty() ? att->attachment_id.value()
                                     : att->display_name;
-      pos += static_cast<int>(label.size()) + 1;
+      pos += static_cast<int>(std::string("[attachment:]").size() + label.size());
       ++block_index;
       continue;
     }
     ++block_index;
+  }
+  return false;
+}
+
+bool EditorViewModel::toggleChecklistAtDocumentPosition(int documentPosition) {
+  if (note_id_.isEmpty() || documentPosition < 0) return false;
+  if (refuseTrashedMutation("toggleChecklist")) return false;
+
+  // Rebuild the structured QTextDocument the mapper would show, then map the
+  // document character position onto (blockIndex, itemIndex). This matches
+  // QML TextArea positionAt() coords, not plain_text offsets.
+  const auto content = contentFromEditor();
+  QTextDocument doc;
+  NoteContentDocumentMapper::applyToDocument(content, doc);
+  if (doc.characterCount() <= 0) {
+    return false;
+  }
+  const int max_pos = std::max(0, doc.characterCount() - 1);
+  if (documentPosition > max_pos) {
+    // Allow clicking at end-of-document; clamp into last character.
+    documentPosition = max_pos;
+  }
+  QTextCursor cursor(&doc);
+  cursor.setPosition(documentPosition);
+  const QTextBlock block = cursor.block();
+  if (!block.isValid()) {
+    return false;
+  }
+
+  // Prefer matching the visible checklist line text (stable across HTML
+  // round-trips) then fall back to QTextBlock ordinal walk.
+  const QString block_text = block.text();
+  int domain_block_index = 0;
+  for (const auto& cblock : content.blocks()) {
+    if (const auto* check = std::get_if<domain::ChecklistBlock>(&cblock)) {
+      const auto& items = check->items();
+      for (std::size_t i = 0; i < items.size(); ++i) {
+        const QString line =
+            (items[i].done ? QStringLiteral("[x] ") : QStringLiteral("[ ] ")) +
+            QString::fromStdString(items[i].text);
+        if (block_text == line || block_text.endsWith(QString::fromStdString(items[i].text))) {
+          toggleChecklistItem(domain_block_index, static_cast<int>(i));
+          return true;
+        }
+      }
+      ++domain_block_index;
+      continue;
+    }
+    ++domain_block_index;
+  }
+
+  // Ordinal fallback: one QTextBlock per paragraph/attachment; one per item.
+  int q_block_index = 0;
+  const int target_q = block.blockNumber();
+  domain_block_index = 0;
+  for (const auto& cblock : content.blocks()) {
+    if (std::get_if<domain::ParagraphBlock>(&cblock) ||
+        std::get_if<domain::AttachmentRefBlock>(&cblock)) {
+      if (q_block_index == target_q) {
+        return false;
+      }
+      ++q_block_index;
+      ++domain_block_index;
+      continue;
+    }
+    if (const auto* check = std::get_if<domain::ChecklistBlock>(&cblock)) {
+      const auto& items = check->items();
+      if (items.empty()) {
+        if (q_block_index == target_q) {
+          toggleChecklistItem(domain_block_index, 0);
+          return true;
+        }
+        ++q_block_index;
+      } else {
+        for (std::size_t i = 0; i < items.size(); ++i) {
+          if (q_block_index == target_q) {
+            toggleChecklistItem(domain_block_index, static_cast<int>(i));
+            return true;
+          }
+          ++q_block_index;
+        }
+      }
+      ++domain_block_index;
+      continue;
+    }
+    ++domain_block_index;
   }
   return false;
 }
@@ -335,6 +470,7 @@ void EditorViewModel::toggleChecklistItem(int blockIndex, int itemIndex) {
     setError(QStringLiteral("Checklist toggle unavailable"));
     return;
   }
+  if (refuseTrashedMutation("toggleChecklistItem")) return;
   if (blockIndex < 0 || itemIndex < 0) {
     setError(QStringLiteral("Invalid checklist index"));
     return;
@@ -407,6 +543,7 @@ void EditorViewModel::attachLocalFile(const QString& localPath) {
     setError(QStringLiteral("Attach unavailable"));
     return;
   }
+  if (refuseTrashedMutation("attachLocalFile")) return;
   QString reason;
   if (!is_safe_local_file_path(localPath, &reason)) {
     setError(QStringLiteral("Unsafe or invalid path: %1").arg(reason));
@@ -481,6 +618,12 @@ void EditorViewModel::removeAttachment(const QString& attachmentId) {
     setError(QStringLiteral("No attachment to remove"));
     return;
   }
+  if (refuseTrashedMutation("removeAttachment")) return;
+  // Untrusted UI/document ids must be opaque-safe before any store remove.
+  if (!domain::AttachmentId::is_opaque_safe(attachmentId.toStdString())) {
+    setError(QStringLiteral("Invalid attachment id"));
+    return;
+  }
   // Flush editor first, then drop AttachmentRefBlock + attempt store remove.
   if (dirty_ || saving_) {
     if (!flushPendingSavesBlocking()) {
@@ -530,6 +673,7 @@ void EditorViewModel::removeAttachment(const QString& attachmentId) {
         }
         self->applyLoadedNote(result.value().saved, true);
         // Best-effort blob cleanup after note save; orphan GC is purge path.
+        // Store seam re-validates id + containment (defense in depth).
         if (self->attachment_store_) {
           (void)self->attachment_store_->remove(
               domain::AttachmentId{att_id.toStdString()});
@@ -562,6 +706,12 @@ domain::Note EditorViewModel::noteSnapshot() const {
   note.modified_at_ms = 0;
   note.revision = revision_;
   note.pinned = pinned_;
+  // Preserve soft-delete metadata so ordinary saves cannot resurrect trash.
+  note.trashed_at_ms = trashed_at_ms_;
+  if (!trashed_from_folder_id_.isEmpty()) {
+    note.trashed_from_folder_id =
+        domain::FolderId{trashed_from_folder_id_.toStdString()};
+  }
   return note;
 }
 
@@ -579,6 +729,7 @@ void EditorViewModel::abandonInFlightUi() {
 }
 
 void EditorViewModel::clearEditorState() {
+  const bool was_trashed = noteTrashed();
   note_id_.clear();
   folder_id_.clear();
   html_.clear();
@@ -586,6 +737,8 @@ void EditorViewModel::clearEditorState() {
   last_saved_html_.clear();
   revision_ = 0;
   created_at_ms_ = 0;
+  trashed_at_ms_ = 0;
+  trashed_from_folder_id_.clear();
   pinned_ = false;
   setDirty(false);
   setError({});
@@ -594,6 +747,9 @@ void EditorViewModel::clearEditorState() {
   emit plainTextChanged();
   emit revisionChanged();
   emit pinnedChanged();
+  if (was_trashed) {
+    emit noteTrashedChanged();
+  }
   emitSaveState();
 }
 
@@ -604,6 +760,7 @@ void EditorViewModel::applySaveSuccess(const application::SaveNote::Outcome& out
   revision_ = out.saved.revision;
   pinned_ = out.saved.pinned;
   created_at_ms_ = out.saved.created_at_ms;
+  assignTrashMetadata(out.saved);
   emit noteIdChanged();
   emit revisionChanged();
   emit pinnedChanged();
@@ -627,6 +784,10 @@ void EditorViewModel::applySaveSuccess(const application::SaveNote::Outcome& out
 void EditorViewModel::openNote(const QString& noteId) {
   if (noteId.isEmpty()) {
     closeNote();
+    return;
+  }
+  if (flushing_) {
+    setError(QStringLiteral("Save in progress; try again shortly."));
     return;
   }
   if (!note_id_.isEmpty() && note_id_ != noteId && (dirty_ || saving_)) {
@@ -658,33 +819,24 @@ void EditorViewModel::openNote(const QString& noteId) {
         if (QString::fromStdString(note.id.value()) != noteId) {
           return;
         }
-        self->note_id_ = QString::fromStdString(note.id.value());
-        self->folder_id_ = QString::fromStdString(note.folder_id.value());
-        self->revision_ = note.revision;
-        self->pinned_ = note.pinned;
-        self->created_at_ms_ = note.created_at_ms;
-        self->applying_load_ = true;
-        self->cacheContent(note.content);
-        self->refreshAttachmentLists(note.content);
-        self->html_ = NoteContentDocumentMapper::toHtml(note.content);
-        self->plain_ = NoteContentDocumentMapper::toPlain(note.content);
-        self->last_saved_html_ = self->html_;
-        self->applying_load_ = false;
-        self->setDirty(false);
-        emit self->noteIdChanged();
-        emit self->revisionChanged();
-        emit self->pinnedChanged();
-        emit self->htmlChanged();
-        emit self->plainTextChanged();
-        self->emitSaveState();
+        // Route through applyLoadedNote so trash metadata is always applied.
+        self->applyLoadedNote(note, true);
       });
 }
 
 void EditorViewModel::closeNote() {
+  if (flushing_) {
+    setError(QStringLiteral("Save in progress; try again shortly."));
+    return;
+  }
   idle_timer_->stop();
   max_timer_->stop();
   if (!note_id_.isEmpty() && (dirty_ || saving_)) {
-    if (!flushPendingSavesBlocking()) {
+    // Never body-save a trashed note (would fight soft-delete policy).
+    if (noteTrashed()) {
+      setDirty(false);
+      queued_resave_ = false;
+    } else if (!flushPendingSavesBlocking()) {
       return;
     }
   }
@@ -693,7 +845,18 @@ void EditorViewModel::closeNote() {
   clearEditorState();
 }
 
+void EditorViewModel::discardEditorWithoutFlush() {
+  idle_timer_->stop();
+  max_timer_->stop();
+  ++load_generation_;
+  abandonInFlightUi();
+  setDirty(false);
+  queued_resave_ = false;
+  clearEditorState();
+}
+
 void EditorViewModel::saveNow() {
+  if (refuseTrashedMutation("saveNow")) return;
   idle_timer_->stop();
   max_timer_->stop();
   performSave(true);
@@ -701,6 +864,12 @@ void EditorViewModel::saveNow() {
 
 void EditorViewModel::performSave(bool /*from_max_timer*/) {
   if (note_id_.isEmpty() || !dirty_) return;
+  if (noteTrashed()) {
+    setDirty(false);
+    queued_resave_ = false;
+    (void)refuseTrashedMutation("performSave");
+    return;
+  }
   if (saving_) {
     queued_resave_ = true;
     return;
@@ -747,7 +916,9 @@ void EditorViewModel::performSave(bool /*from_max_timer*/) {
 
 std::optional<application::SaveNote::Request>
 EditorViewModel::pendingSaveRequest() const {
-  if (note_id_.isEmpty() || (!dirty_ && !saving_)) return std::nullopt;
+  if (note_id_.isEmpty() || noteTrashed() || (!dirty_ && !saving_)) {
+    return std::nullopt;
+  }
   application::SaveNote::Request req;
   req.note = noteSnapshot();
   req.allow_keep_both = true;
@@ -757,7 +928,11 @@ EditorViewModel::pendingSaveRequest() const {
 void EditorViewModel::flushDirtySyncRequest(std::function<void()> done) {
   idle_timer_->stop();
   max_timer_->stop();
-  if (note_id_.isEmpty() || !dirty_) {
+  if (note_id_.isEmpty() || !dirty_ || noteTrashed()) {
+    if (noteTrashed()) {
+      setDirty(false);
+      queued_resave_ = false;
+    }
     if (done) done();
     return;
   }
@@ -795,10 +970,27 @@ bool EditorViewModel::flushPendingSavesBlocking() {
     queued_resave_ = false;
     return true;
   }
+  // Soft-deleted notes must not body-save (would clear or fight trash metadata).
+  if (noteTrashed()) {
+    setDirty(false);
+    queued_resave_ = false;
+    setSaving(false);
+    return true;
+  }
+  // Nested flush is unsafe: prior AllEvents pump allowed re-entrant close/open.
+  if (flushing_) {
+    return false;
+  }
+  flushing_ = true;
+  struct FlushGuard {
+    bool& flag;
+    ~FlushGuard() { flag = false; }
+  } guard{flushing_};
 
   if (saving_) {
+    // Drain the IO strand only. Do NOT process user-input / QML events here —
+    // AllEvents re-entrancy caused nested close/switch mid-flush.
     dispatcher_.runBlocking([] {});
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 1000);
   }
 
   if (!dirty_) {

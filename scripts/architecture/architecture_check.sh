@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
-# architecture-check — CI job name must remain architecture-check
+# architecture-check — canonical layer rules (CI job name: architecture-check)
+# Usage: architecture_check.sh [ROOT]
+# ROOT defaults to repository root (two levels above this script).
 set -euo pipefail
-ROOT="${1:-.}"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ "${1:-}" != "" ]]; then
+  ROOT="$(cd "$1" && pwd)"
+else
+  ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+fi
 cd "$ROOT"
+
 fail=0
 ok() { printf 'OK: %s\n' "$*"; }
 bad() { printf 'FAIL: %s\n' "$*"; fail=1; }
@@ -46,7 +55,16 @@ else
   ok "domain has no sqlite"
 fi
 
-# 5) Production src must not reference test fakes
+# 5) Domain free of iostream / filesystem IO seams
+if rg -n --glob '*.{h,hpp,c,cpp}' \
+  '#\s*include\s*[<"](fstream|filesystem|sqlite3)' \
+  src/domain 2>/dev/null; then
+  bad "domain includes fstream/filesystem/sqlite"
+else
+  ok "domain has no fstream/filesystem/sqlite includes"
+fi
+
+# 6) Production src must not reference test fakes
 if rg -n --glob '*.{h,hpp,c,cpp}' 'InMemoryNoteStore|tests/support' src 2>/dev/null; then
   bad "production src references test support/fakes"
 else

@@ -244,8 +244,14 @@ ApplicationWindow {
         }
         onAccepted: {
             if (root.notes && root.pendingPurgeNoteId.length > 0) {
-                if (root.editor && root.editor.noteId === root.pendingPurgeNoteId)
-                    root.editor.closeNote()
+                // Discard without flush: closeNote flushes dirty body and would
+                // resurrect trash (noteSnapshot historically dropped trashed_at).
+                if (root.editor && root.editor.noteId === root.pendingPurgeNoteId) {
+                    if (root.editor.discardEditorWithoutFlush)
+                        root.editor.discardEditorWithoutFlush()
+                    else
+                        root.editor.closeNote()
+                }
                 root.notes.purgeNote(root.pendingPurgeNoteId)
             }
             root.pendingPurgeNoteId = ""
