@@ -1,0 +1,18 @@
+<RCC>
+    <qresource prefix="/qt/qml/Notes">
+        <file>qmldir</file>
+        <file>Main.qml</file>
+        <file>panes/FolderPane.qml</file>
+        <file>panes/NoteListPane.qml</file>
+        <file>panes/EditorPane.qml</file>
+        <file>components/SaveStateBadge.qml</file>
+    </qresource>
+    <qresource prefix="/notes">
+        <file>Main.qml</file>
+        <file>panes/FolderPane.qml</file>
+        <file>panes/NoteListPane.qml</file>
+        <file>panes/EditorPane.qml</file>
+        <file>components/SaveStateBadge.qml</file>
+    </qresource>
+</RCC>
+

@@ -1,0 +1,109 @@
+#include "application/use_cases/notes/create_note.hpp"
+#include "application/use_cases/notes/save_note.hpp"
+#include "tests/support/fakes/fixed_clock.hpp"
+#include "tests/support/fakes/in_memory_note_store.hpp"
+
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <unordered_set>
+
+static void require(bool c, const char* m) {
+  if (!c) throw std::runtime_error(m);
+}
+
+int main() {
+  using namespace notes;
+  try {
+    testing::InMemoryNoteStore store;
+    testing::FixedClock clock{1'000'000};
+
+    application::CreateNote create(store, clock);
+    application::CreateNote::Request creq;
+    creq.folder_id = domain::FolderId{std::string{"root"}};
+    creq.title = "A";
+    creq.content = domain::NoteContent::from_plain_text("A body");
+    auto created = create.execute(std::move(creq));
+    require(created.has_value(), "create");
+    auto note = created.value();
+    require(note.revision == 1, "rev1");
+
+    domain::Note concurrent = note;
+    concurrent.content = domain::NoteContent::from_plain_text("B");
+    concurrent.revision = 1;
+    auto cs = store.save(concurrent);
+    require(cs.has_value() && cs.value().revision == 2, "concurrent");
+
+    application::SaveNote save(store, store, clock);
+    application::SaveNote::Request req;
+    req.note = note;
+    req.note.content = domain::NoteContent::from_plain_text("C from stale");
+    req.note.revision = 1;
+    req.allow_keep_both = true;
+    auto r = save.execute(std::move(req));
+    require(r.has_value(), "keep both");
+    require(r.value().kept_both, "flag");
+    require(!r.value().preserved_prior_id.empty(), "preserved id");
+    require(r.value().saved.id.value().find("note-conflict-") == 0,
+            "conflict id prefix");
+
+    auto prior = store.load(note.id);
+    require(prior.has_value(), "prior");
+    require(prior.value().content.plain_text().find('B') != std::string::npos,
+            "prior body");
+    auto conflict = store.load(r.value().saved.id);
+    require(conflict.has_value(), "conflict note");
+    require(conflict.value().content.plain_text().find('C') !=
+                std::string::npos,
+            "conflict body");
+
+    // P10: two keep-boths under FixedClock must yield unique ids.
+    {
+      testing::InMemoryNoteStore store2;
+      testing::FixedClock clock2{42};
+      application::SaveNote save2(store2, store2, clock2);
+
+      domain::Note base;
+      base.id = domain::NoteId{std::string{"shared"}};
+      base.folder_id = domain::FolderId{std::string{"root"}};
+      base.title = "shared";
+      base.content = domain::NoteContent::from_plain_text("v0");
+      base.revision = 0;
+      base.created_at_ms = 1;
+      base.modified_at_ms = 1;
+      require(static_cast<bool>(store2.save(base)), "base insert");
+
+      domain::Note head = store2.load(base.id).value();
+      head.content = domain::NoteContent::from_plain_text("head");
+      head.revision = 1;
+      require(static_cast<bool>(store2.save(head)), "head");
+
+      std::unordered_set<std::string> ids;
+      for (int i = 0; i < 2; ++i) {
+        application::SaveNote::Request kb;
+        kb.note = base;
+        kb.note.revision = 1;
+        kb.note.content = domain::NoteContent::from_plain_text(
+            std::string("conflict-") + std::to_string(i));
+        kb.note.title = std::string("T") + std::to_string(i);
+        kb.allow_keep_both = true;
+        auto out = save2.execute(std::move(kb));
+        require(out.has_value() && out.value().kept_both, "kb ok");
+        const auto& id = out.value().saved.id.value();
+        require(ids.insert(id).second, "unique conflict id");
+        require(id.find("note-conflict-42-") == 0, "ms+token form");
+        // Suffix after final '-' is entropy/identity, not a bare process counter.
+        const auto dash = id.find_last_of('-');
+        require(dash != std::string::npos && id.size() > dash + 8,
+                "non-trivial token suffix");
+      }
+      require(ids.size() == 2, "two distinct ids");
+    }
+
+    std::cerr << "save_note keep-both PASS\n";
+  } catch (const std::exception& ex) {
+    std::cerr << "FAIL " << ex.what() << "\n";
+    return 1;
+  }
+  return 0;
+}
