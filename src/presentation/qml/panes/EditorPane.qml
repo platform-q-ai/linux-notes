@@ -2,82 +2,145 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-Frame {
+Item {
     id: root
-    property var editorVm
+    property var editorVm: null
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 8
+        anchors.margins: 8
+        spacing: 6
 
         RowLayout {
-            Label {
-                text: editorVm && editorVm.noteId.length > 0 ? qsTr("Editor") : qsTr("No note selected")
+            spacing: 4
+            enabled: root.editorVm && root.editorVm.noteId
+                     && root.editorVm.noteId.length > 0
+
+            ToolButton {
+                text: "B"
                 font.bold: true
-                Layout.fillWidth: true
+                onClicked: editor.applyInline("bold")
             }
-            Button {
-                text: qsTr("Bold")
-                enabled: editorVm && editorVm.noteId.length > 0
-                onClicked: wrapSelection("b")
+            ToolButton {
+                text: "I"
+                font.italic: true
+                onClicked: editor.applyInline("italic")
             }
-            Button {
-                text: qsTr("Italic")
-                enabled: editorVm && editorVm.noteId.length > 0
-                onClicked: wrapSelection("i")
+            ToolButton {
+                text: "U"
+                font.underline: true
+                onClicked: editor.applyInline("underline")
             }
-            Button {
-                text: qsTr("Underline")
-                enabled: editorVm && editorVm.noteId.length > 0
-                onClicked: wrapSelection("u")
-            }
-            Button {
+            ToolSeparator {}
+            ToolButton {
                 text: qsTr("Undo")
-                enabled: body.canUndo
-                onClicked: body.undo()
+                enabled: editor.canUndo
+                onClicked: editor.undo()
             }
-            Button {
+            ToolButton {
                 text: qsTr("Redo")
-                enabled: body.canRedo
-                onClicked: body.redo()
+                enabled: editor.canRedo
+                onClicked: editor.redo()
             }
-            Label {
-                text: !editorVm ? "" : (editorVm.saving ? qsTr("Saving…") : (editorVm.dirty ? qsTr("Unsaved") : qsTr("Saved")))
+            Item { Layout.fillWidth: true }
+            CheckBox {
+                id: pinBox
+                text: qsTr("Pinned")
+                checked: root.editorVm ? root.editorVm.pinned : false
+                onClicked: if (root.editorVm) root.editorVm.pinned = checked
             }
         }
 
-        TextArea {
-            id: body
+        ScrollView {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            wrapMode: TextArea.Wrap
-            textFormat: TextEdit.RichText
-            text: editorVm ? editorVm.html : ""
-            enabled: editorVm && editorVm.noteId.length > 0
-            persistentSelection: true
-            onTextChanged: {
-                if (!editorVm || !enabled)
-                    return
-                if (text !== editorVm.html)
-                    editorVm.html = text
+            clip: true
+
+            TextArea {
+                id: editor
+                wrapMode: TextEdit.Wrap
+                textFormat: TextEdit.RichText
+                persistentSelection: true
+                selectByMouse: true
+                readOnly: !(root.editorVm && root.editorVm.noteId
+                            && root.editorVm.noteId.length > 0)
+                placeholderText: qsTr("Select or create a note")
+                property bool suppress: false
+
+                function applyInline(kind) {
+                    if (selectedText.length === 0)
+                        return
+                    var t = selectedText
+                    var start = selectionStart
+                    var end = selectionEnd
+                    remove(start, end)
+                    if (kind === "bold")
+                        insert(start, "<b>" + t + "</b>")
+                    else if (kind === "italic")
+                        insert(start, "<i>" + t + "</i>")
+                    else if (kind === "underline")
+                        insert(start, "<u>" + t + "</u>")
+                }
+
+                Keys.onPressed: function (event) {
+                    if (!(event.modifiers & Qt.ControlModifier))
+                        return
+                    if (event.key === Qt.Key_B) {
+                        applyInline("bold"); event.accepted = true
+                    } else if (event.key === Qt.Key_I) {
+                        applyInline("italic"); event.accepted = true
+                    } else if (event.key === Qt.Key_U) {
+                        applyInline("underline"); event.accepted = true
+                    }
+                }
+
+                onTextChanged: {
+                    if (suppress)
+                        return
+                    if (!root.editorVm)
+                        return
+                    if (root.editorVm.html === text)
+                        return
+                    root.editorVm.html = text
+                    root.editorVm.markUndoRedo(canUndo, canRedo)
+                }
+                onCanUndoChanged: if (root.editorVm)
+                    root.editorVm.markUndoRedo(canUndo, canRedo)
+                onCanRedoChanged: if (root.editorVm)
+                    root.editorVm.markUndoRedo(canUndo, canRedo)
             }
+        }
+
+        Label {
+            visible: root.editorVm && root.editorVm.errorString
+                     && root.editorVm.errorString.length > 0
+            text: root.editorVm ? root.editorVm.errorString : ""
+            color: "#b00020"
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
         }
     }
 
-    function wrapSelection(tag) {
-        if (!body || body.selectedText.length === 0)
+    function pullFromVm() {
+        if (!root.editorVm)
             return
-        const open = "<" + tag + ">"
-        const close = "</" + tag + ">"
-        body.insert(body.selectionEnd, close)
-        body.insert(body.selectionStart, open)
+        if (editor.text === root.editorVm.html)
+            return
+        editor.suppress = true
+        editor.text = root.editorVm.html
+        editor.suppress = false
+        if (pinBox.checked !== root.editorVm.pinned)
+            pinBox.checked = root.editorVm.pinned
     }
 
     Connections {
-        target: editorVm
-        function onHtmlChanged() {
-            if (body.text !== editorVm.html)
-                body.text = editorVm.html
+        target: root.editorVm
+        ignoreUnknownSignals: true
+        function onHtmlChanged() { root.pullFromVm() }
+        function onNoteIdChanged() { root.pullFromVm() }
+        function onPinnedChanged() {
+            if (root.editorVm && pinBox.checked !== root.editorVm.pinned)
+                pinBox.checked = root.editorVm.pinned
         }
     }
 }

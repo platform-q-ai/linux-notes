@@ -54,9 +54,13 @@ public:
   [[nodiscard]] bool canRedo() const { return can_redo_; }
 
   Q_INVOKABLE void openNote(const QString& noteId);
+  // Alias used by presentation tests.
+  Q_INVOKABLE void loadNote(const QString& noteId) { openNote(noteId); }
   Q_INVOKABLE void closeNote();
   Q_INVOKABLE void saveNow();
   Q_INVOKABLE void markUndoRedo(bool canUndo, bool canRedo);
+  // Plain-text edit path for tests / simple surfaces.
+  Q_INVOKABLE void setPlainText(const QString& plain);
 
   // composition_root aboutToQuit: posts pending save on IO strand and waits.
   void flushSync();

@@ -2,26 +2,37 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-Frame {
+Item {
     id: root
-    property var noteListVm
-    property var folderVm
+    property var noteListVm: null
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 8
+        anchors.margins: 8
+        spacing: 6
 
         RowLayout {
-            Label { text: qsTr("Notes"); font.bold: true; Layout.fillWidth: true }
-            Button {
-                text: qsTr("+")
-                enabled: folderVm && folderVm.selectedFolderId && folderVm.selectedFolderId.length > 0
-                onClicked: if (noteListVm) noteListVm.createNote()
+            Label {
+                text: {
+                    if (root.noteListVm && root.noteListVm.searching)
+                        return qsTr("Search results")
+                    return qsTr("Notes")
+                }
+                font.bold: true
+                Layout.fillWidth: true
             }
-            Button {
+            ToolButton {
+                text: qsTr("New")
+                onClicked: if (root.noteListVm) root.noteListVm.createNote()
+            }
+            ToolButton {
                 text: qsTr("Del")
-                enabled: noteListVm && noteListVm.selectedNoteId && noteListVm.selectedNoteId.length > 0
-                onClicked: if (noteListVm) noteListVm.deleteNote(noteListVm.selectedNoteId)
+                enabled: !!(root.noteListVm && root.noteListVm.selectedNoteId
+                            && root.noteListVm.selectedNoteId.length > 0)
+                onClicked: {
+                    if (root.noteListVm)
+                        root.noteListVm.deleteNote(root.noteListVm.selectedNoteId)
+                }
             }
         }
 
@@ -30,13 +41,34 @@ Frame {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            model: noteListVm ? noteListVm.model : null
+            model: root.noteListVm ? root.noteListVm.model : null
+            currentIndex: -1
             delegate: ItemDelegate {
-                width: list.width
-                text: model.title
-                highlighted: noteListVm && model.noteId === noteListVm.selectedNoteId
-                onClicked: if (noteListVm) noteListVm.selectedNoteId = model.noteId
+                width: ListView.view.width
+                required property string noteId
+                required property string title
+                required property bool pinned
+                required property int index
+                text: (pinned ? "📌 " : "")
+                      + (title && title.length ? title : qsTr("Untitled"))
+                highlighted: ListView.isCurrentItem
+                             || !!(root.noteListVm
+                                   && root.noteListVm.selectedNoteId === noteId)
+                onClicked: {
+                    list.currentIndex = index
+                    if (root.noteListVm)
+                        root.noteListVm.selectedNoteId = noteId
+                }
             }
+        }
+
+        Label {
+            visible: !!(root.noteListVm && root.noteListVm.errorString
+                        && root.noteListVm.errorString.length > 0)
+            text: root.noteListVm ? root.noteListVm.errorString : ""
+            color: "#b00020"
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
         }
     }
 }

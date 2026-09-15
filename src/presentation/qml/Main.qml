@@ -10,7 +10,6 @@ ApplicationWindow {
     title: qsTr("Linux Notes")
     color: "#f5f5f7"
 
-    // Context properties from composition_root: folderVm, noteListVm, editorVm
     property var folders: typeof folderVm !== "undefined" ? folderVm : null
     property var notes: typeof noteListVm !== "undefined" ? noteListVm : null
     property var editor: typeof editorVm !== "undefined" ? editorVm : null
@@ -40,6 +39,7 @@ ApplicationWindow {
             Loader {
                 source: "qrc:/notes/components/SaveStateBadge.qml"
                 onLoaded: {
+                    if (!item) return
                     item.saveState = Qt.binding(function () {
                         return root.editor ? root.editor.saveState : "empty"
                     })
@@ -51,7 +51,7 @@ ApplicationWindow {
 
             ToolButton {
                 text: qsTr("Save")
-                enabled: root.editor && root.editor.dirty
+                enabled: !!(root.editor && root.editor.dirty)
                 onClicked: if (root.editor) root.editor.saveNow()
             }
         }
@@ -66,11 +66,8 @@ ApplicationWindow {
             SplitView.minimumWidth: 160
             source: "qrc:/notes/panes/FolderPane.qml"
             onLoaded: {
+                if (!item) return
                 item.folderVm = Qt.binding(function () { return root.folders })
-                item.folderSelected.connect(function (id) {
-                    if (root.notes)
-                        root.notes.folderId = id
-                })
             }
         }
 
@@ -79,11 +76,8 @@ ApplicationWindow {
             SplitView.minimumWidth: 180
             source: "qrc:/notes/panes/NoteListPane.qml"
             onLoaded: {
+                if (!item) return
                 item.noteListVm = Qt.binding(function () { return root.notes })
-                item.noteSelected.connect(function (id) {
-                    if (root.editor)
-                        root.editor.openNote(id)
-                })
             }
         }
 
@@ -92,6 +86,7 @@ ApplicationWindow {
             SplitView.minimumWidth: 320
             source: "qrc:/notes/panes/EditorPane.qml"
             onLoaded: {
+                if (!item) return
                 item.editorVm = Qt.binding(function () { return root.editor })
             }
         }
@@ -106,6 +101,8 @@ ApplicationWindow {
 
     Connections {
         target: root.folders
+        enabled: root.folders !== null
+        ignoreUnknownSignals: true
         function onSelectedFolderIdChanged() {
             if (root.notes && root.folders)
                 root.notes.folderId = root.folders.selectedFolderId
@@ -114,6 +111,8 @@ ApplicationWindow {
 
     Connections {
         target: root.notes
+        enabled: root.notes !== null
+        ignoreUnknownSignals: true
         function onOpenNoteRequested(noteId) {
             if (root.editor)
                 root.editor.openNote(noteId)
@@ -130,6 +129,8 @@ ApplicationWindow {
 
     Connections {
         target: root.editor
+        enabled: root.editor !== null
+        ignoreUnknownSignals: true
         function onSaved(noteId, title, revision, pinned) {
             if (root.notes)
                 root.notes.applySummaryTitle(noteId, title, revision, pinned)

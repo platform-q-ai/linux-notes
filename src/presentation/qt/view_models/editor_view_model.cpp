@@ -72,6 +72,12 @@ void EditorViewModel::markUndoRedo(bool canUndo, bool canRedo) {
   emit undoStateChanged();
 }
 
+void EditorViewModel::setPlainText(const QString& plain) {
+  // Convert via document mapper so save path still uses rich-text HTML snapshot.
+  const auto content = NoteContentDocumentMapper::fromPlain(plain);
+  setHtml(NoteContentDocumentMapper::toHtml(content));
+}
+
 void EditorViewModel::setHtml(const QString& html) {
   if (applying_load_) {
     html_ = html;

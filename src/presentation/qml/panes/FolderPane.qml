@@ -2,19 +2,35 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-Frame {
+Item {
     id: root
-    property var folderVm
+    property var folderVm: null
+    // Optional external sink if Main does not bind Connections.
+    property var onSelect: null
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 8
+        anchors.margins: 8
+        spacing: 6
 
         RowLayout {
-            Label { text: qsTr("Folders"); font.bold: true; Layout.fillWidth: true }
-            Button {
-                text: qsTr("+")
-                onClicked: if (folderVm) folderVm.createFolder(qsTr("New Folder"))
+            Label {
+                text: qsTr("Folders")
+                font.bold: true
+                Layout.fillWidth: true
+            }
+            ToolButton {
+                text: "+"
+                onClicked: newFolderDialog.open()
+            }
+            ToolButton {
+                text: qsTr("Del")
+                enabled: !!(root.folderVm && root.folderVm.selectedFolderId
+                            && root.folderVm.selectedFolderId.length > 0)
+                onClicked: {
+                    if (root.folderVm)
+                        root.folderVm.deleteFolder(root.folderVm.selectedFolderId)
+                }
             }
         }
 
@@ -23,14 +39,48 @@ Frame {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            model: folderVm ? folderVm.model : null
-            currentIndex: -1
+            model: root.folderVm ? root.folderVm.model : null
             delegate: ItemDelegate {
-                width: list.width
-                text: model.name
-                highlighted: folderVm && model.folderId === folderVm.selectedFolderId
-                onClicked: if (folderVm) folderVm.selectedFolderId = model.folderId
+                width: ListView.view.width
+                required property string folderId
+                required property string name
+                required property string parentId
+                text: (parentId && parentId.length ? "  " : "") + name
+                highlighted: !!(root.folderVm
+                                && root.folderVm.selectedFolderId === folderId)
+                onClicked: {
+                    if (root.folderVm)
+                        root.folderVm.selectedFolderId = folderId
+                }
             }
+        }
+
+        Label {
+            visible: !!(root.folderVm && root.folderVm.errorString
+                        && root.folderVm.errorString.length > 0)
+            text: root.folderVm ? root.folderVm.errorString : ""
+            color: "#b00020"
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+        }
+    }
+
+    Dialog {
+        id: newFolderDialog
+        title: qsTr("New folder")
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        anchors.centerIn: parent
+        TextField {
+            id: nameField
+            placeholderText: qsTr("Folder name")
+            width: parent ? parent.width : 200
+        }
+        onAccepted: {
+            if (root.folderVm && nameField.text.trim().length > 0)
+                root.folderVm.createFolder(nameField.text.trim(),
+                                           root.folderVm.selectedFolderId)
+            nameField.text = ""
         }
     }
 }
