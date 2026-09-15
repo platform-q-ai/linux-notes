@@ -41,6 +41,17 @@ void NoteListModel::upsert(const domain::NoteSummary& summary) {
   endResetModel();
 }
 
+void NoteListModel::updateIfPresent(const domain::NoteSummary& summary) {
+  const int existing = rowForNoteId(summary.id);
+  if (existing < 0) {
+    return;
+  }
+  beginResetModel();
+  notes_[existing] = summary;
+  sortInPlace();
+  endResetModel();
+}
+
 void NoteListModel::removeById(const domain::NoteId& id) {
   const int row = rowForNoteId(id);
   if (row < 0) {
@@ -65,6 +76,10 @@ int NoteListModel::rowForNoteId(const domain::NoteId& id) const {
     }
   }
   return -1;
+}
+
+bool NoteListModel::contains(const domain::NoteId& id) const {
+  return rowForNoteId(id) >= 0;
 }
 
 int NoteListModel::rowCount(const QModelIndex& parent) const {

@@ -9,8 +9,9 @@ namespace {
 
 // Latest durable schema version stamped in schema_migrations after successful
 // upgrade. v1 = base tables; v2 = notes_search + integrity backfill (repairs
-// prior-PR DBs that stamped v1 without a usable search index / FK).
-constexpr int kLatestSchemaVersion = 2;
+// prior-PR DBs that stamped v1 without a usable search index / FK);
+// v3 = soft-delete columns on notes (trashed_at, trashed_from_folder_id).
+constexpr int kLatestSchemaVersion = 3;
 
 constexpr const char* kEnsureMigrationsTable = R"SQL(
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -41,6 +42,8 @@ CREATE TABLE IF NOT EXISTS notes (
   modified_at INTEGER NOT NULL,
   revision INTEGER NOT NULL,
   pinned INTEGER NOT NULL DEFAULT 0,
+  trashed_at INTEGER NOT NULL DEFAULT 0,
+  trashed_from_folder_id TEXT,
   FOREIGN KEY (folder_id) REFERENCES folders(id)
 );
 )SQL";
@@ -48,6 +51,7 @@ CREATE TABLE IF NOT EXISTS notes (
 constexpr const char* kCreateNoteIndexes = R"SQL(
 CREATE INDEX IF NOT EXISTS idx_notes_folder ON notes(folder_id);
 CREATE INDEX IF NOT EXISTS idx_notes_modified ON notes(modified_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notes_trashed ON notes(trashed_at);
 )SQL";
 
 constexpr const char* kCreateNotesSearch = R"SQL(
@@ -256,6 +260,9 @@ application::Result<void> verify_base_tables(SqliteDb& self) {
         "migration failed: notes table missing required columns "
         "(incompatible legacy schema)");
   }
+  // Soft-delete columns required at latest schema (added in v3). Fresh v1 path
+  // creates them; upgrades add via ALTER. verify runs after each step — only
+  // enforce when columns are expected (present on latest path).
   if (!table_exists(db, "notes_search")) {
     return fail_msg("migration failed: notes_search missing after upgrade");
   }
@@ -306,6 +313,43 @@ application::Result<void> apply_v2_search(SqliteDb& self) {
   e = verify_base_tables(self);
   if (!e) return e;
   return stamp_version(self, 2);
+}
+
+// Non-destructive soft-delete columns. Existing notes remain active (trashed_at=0).
+application::Result<void> apply_v3_trash(SqliteDb& self) {
+  // Keep search index coherent before integrity checks (e.g. notes added under
+  // a stamped-v2 file without matching notes_search rows).
+  auto e = ensure_notes_search_canonical(self);
+  if (!e) return e;
+
+  sqlite3* db = self.handle();
+  if (!column_exists(db, "notes", "trashed_at")) {
+    e = self.exec(
+        "ALTER TABLE notes ADD COLUMN trashed_at INTEGER NOT NULL DEFAULT 0;");
+    if (!e) return e;
+  }
+  if (!column_exists(db, "notes", "trashed_from_folder_id")) {
+    e = self.exec(
+        "ALTER TABLE notes ADD COLUMN trashed_from_folder_id TEXT;");
+    if (!e) return e;
+  }
+  e = self.exec(
+      "CREATE INDEX IF NOT EXISTS idx_notes_trashed ON notes(trashed_at);");
+  if (!e) return e;
+
+  // Ensure every note has a defined trashed_at (legacy ALTER default is enough;
+  // still normalize NULL if any driver left it).
+  e = self.exec("UPDATE notes SET trashed_at=0 WHERE trashed_at IS NULL;");
+  if (!e) return e;
+
+  if (!column_exists(db, "notes", "trashed_at") ||
+      !column_exists(db, "notes", "trashed_from_folder_id")) {
+    return fail_msg(
+        "migration failed: soft-delete columns missing after v3 upgrade");
+  }
+  e = verify_base_tables(self);
+  if (!e) return e;
+  return stamp_version(self, 3);
 }
 
 }  // namespace
@@ -405,6 +449,8 @@ application::Result<void> SqliteDb::migrate() {
     } else if (current == 1) {
       // Prior-PR path: may already have v1 stamp without notes_search/FKs.
       e = apply_v2_search(*this);
+    } else if (current == 2) {
+      e = apply_v3_trash(*this);
     } else {
       (void)rollback();
       return fail_msg("migration failed: no upgrade path from version " +
@@ -446,6 +492,13 @@ application::Result<void> SqliteDb::migrate() {
     if (!e) {
       (void)rollback();
       return e;
+    }
+    // Soft-delete columns must exist at latest.
+    if (!column_exists(db_, "notes", "trashed_at") ||
+        !column_exists(db_, "notes", "trashed_from_folder_id")) {
+      (void)rollback();
+      return fail_msg(
+          "migration failed: soft-delete columns missing at latest schema");
     }
     e = commit();
     if (!e) {

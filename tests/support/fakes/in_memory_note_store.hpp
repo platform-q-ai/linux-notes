@@ -21,7 +21,8 @@ class InMemoryNoteStore final : public application::NoteReader,
                                 public application::FolderReader,
                                 public application::FolderWriter {
 public:
-  [[nodiscard]] application::Result<domain::Note> load(const domain::NoteId& id) const override {
+  [[nodiscard]] application::Result<domain::Note> load(
+      const domain::NoteId& id) const override {
     std::lock_guard lock(mu_);
     auto it = notes_.find(id);
     if (it == notes_.end()) {
@@ -36,16 +37,46 @@ public:
     std::lock_guard lock(mu_);
     std::vector<domain::NoteSummary> out;
     for (const auto& [id, note] : notes_) {
-      if (note.folder_id == folder_id) out.push_back(to_summary(note));
+      if (note.folder_id == folder_id && !note.is_trashed()) {
+        out.push_back(to_summary(note));
+      }
     }
     std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
       if (a.pinned != b.pinned) return a.pinned > b.pinned;
       return a.modified_at_ms > b.modified_at_ms;
     });
-    return application::Result<std::vector<domain::NoteSummary>>::ok(std::move(out));
+    return application::Result<std::vector<domain::NoteSummary>>::ok(
+        std::move(out));
   }
 
-  [[nodiscard]] application::Result<domain::Note> save(const domain::Note& note) override {
+  [[nodiscard]] application::Result<std::vector<domain::NoteSummary>>
+  list_trashed() const override {
+    std::lock_guard lock(mu_);
+    std::vector<domain::NoteSummary> out;
+    for (const auto& [id, note] : notes_) {
+      if (note.is_trashed()) out.push_back(to_summary(note));
+    }
+    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
+      return a.trashed_at_ms > b.trashed_at_ms;
+    });
+    return application::Result<std::vector<domain::NoteSummary>>::ok(
+        std::move(out));
+  }
+
+  [[nodiscard]] application::Result<std::vector<domain::NoteId>> all_note_ids()
+      const override {
+    std::lock_guard lock(mu_);
+    std::vector<domain::NoteId> out;
+    out.reserve(notes_.size());
+    for (const auto& [id, note] : notes_) {
+      (void)note;
+      out.push_back(id);
+    }
+    return application::Result<std::vector<domain::NoteId>>::ok(std::move(out));
+  }
+
+  [[nodiscard]] application::Result<domain::Note> save(
+      const domain::Note& note) override {
     std::lock_guard lock(mu_);
     auto it = notes_.find(note.id);
     if (it == notes_.end()) {
@@ -62,16 +93,76 @@ public:
       return application::Result<domain::Note>::fail(
           {application::ErrorKind::RevisionConflict, "CAS failed"});
     }
+    if (it->second.is_trashed() && note.trashed_at_ms <= 0) {
+      return application::Result<domain::Note>::fail(
+          {application::ErrorKind::ValidationFailed,
+           "cannot clear trash via save; use restore"});
+    }
     domain::Note stored = note;
+    if (it->second.is_trashed()) {
+      // Keep parked trash metadata from storage (restore is the only clearer).
+      stored.trashed_at_ms = it->second.trashed_at_ms;
+      stored.trashed_from_folder_id = it->second.trashed_from_folder_id;
+      stored.folder_id = it->second.folder_id;
+    }
     stored.revision = note.revision + 1;
     it->second = stored;
     return application::Result<domain::Note>::ok(stored);
   }
 
-  [[nodiscard]] application::Result<void> remove(const domain::NoteId& id) override {
+  [[nodiscard]] application::Result<void> trash(
+      const domain::NoteId& id, std::int64_t trashed_at_ms) override {
+    std::lock_guard lock(mu_);
+    auto it = notes_.find(id);
+    if (it == notes_.end()) {
+      return application::Result<void>::fail(
+          {application::ErrorKind::NotFound, "note not found"});
+    }
+    if (it->second.is_trashed()) {
+      return application::Result<void>::ok();
+    }
+    it->second.trashed_from_folder_id = it->second.folder_id;
+    it->second.folder_id = domain::FolderId{"root"};
+    it->second.trashed_at_ms = trashed_at_ms;
+    it->second.modified_at_ms = trashed_at_ms;
+    it->second.revision += 1;
+    return application::Result<void>::ok();
+  }
+
+  [[nodiscard]] application::Result<domain::Note> restore(
+      const domain::NoteId& id,
+      const domain::FolderId& restore_folder_id) override {
+    std::lock_guard lock(mu_);
+    auto it = notes_.find(id);
+    if (it == notes_.end()) {
+      return application::Result<domain::Note>::fail(
+          {application::ErrorKind::NotFound, "note not found"});
+    }
+    if (!it->second.is_trashed()) {
+      return application::Result<domain::Note>::fail(
+          {application::ErrorKind::ValidationFailed, "note is not in trash"});
+    }
+    if (folders_.find(restore_folder_id) == folders_.end() &&
+        restore_folder_id.value() != "root") {
+      // Allow root even if not seeded in pure unit tests.
+      if (restore_folder_id.value() != "root") {
+        return application::Result<domain::Note>::fail(
+            {application::ErrorKind::NotFound, "restore folder not found"});
+      }
+    }
+    it->second.folder_id = restore_folder_id;
+    it->second.trashed_at_ms = 0;
+    it->second.trashed_from_folder_id = std::nullopt;
+    it->second.revision += 1;
+    return application::Result<domain::Note>::ok(it->second);
+  }
+
+  [[nodiscard]] application::Result<void> remove(
+      const domain::NoteId& id) override {
     std::lock_guard lock(mu_);
     if (notes_.erase(id) == 0) {
-      return application::Result<void>::fail({application::ErrorKind::NotFound, "note not found"});
+      return application::Result<void>::fail(
+          {application::ErrorKind::NotFound, "note not found"});
     }
     return application::Result<void>::ok();
   }
@@ -82,10 +173,14 @@ public:
     const auto q = to_lower(query);
     std::vector<domain::NoteSummary> out;
     for (const auto& [id, note] : notes_) {
+      if (note.is_trashed()) continue;
       const auto hay = to_lower(note.title + " " + note.content.plain_text());
-      if (q.empty() || hay.find(q) != std::string::npos) out.push_back(to_summary(note));
+      if (q.empty() || hay.find(q) != std::string::npos) {
+        out.push_back(to_summary(note));
+      }
     }
-    return application::Result<std::vector<domain::NoteSummary>>::ok(std::move(out));
+    return application::Result<std::vector<domain::NoteSummary>>::ok(
+        std::move(out));
   }
 
   [[nodiscard]] application::Result<domain::Folder> load(
@@ -99,7 +194,8 @@ public:
     return application::Result<domain::Folder>::ok(it->second);
   }
 
-  [[nodiscard]] application::Result<std::vector<domain::Folder>> list_all() const override {
+  [[nodiscard]] application::Result<std::vector<domain::Folder>> list_all()
+      const override {
     std::lock_guard lock(mu_);
     std::vector<domain::Folder> out;
     out.reserve(folders_.size());
@@ -111,13 +207,15 @@ public:
     return application::Result<std::vector<domain::Folder>>::ok(std::move(out));
   }
 
-  [[nodiscard]] application::Result<domain::Folder> save(const domain::Folder& folder) override {
+  [[nodiscard]] application::Result<domain::Folder> save(
+      const domain::Folder& folder) override {
     std::lock_guard lock(mu_);
     folders_[folder.id] = folder;
     return application::Result<domain::Folder>::ok(folder);
   }
 
-  [[nodiscard]] application::Result<void> remove(const domain::FolderId& id) override {
+  [[nodiscard]] application::Result<void> remove(
+      const domain::FolderId& id) override {
     std::lock_guard lock(mu_);
     if (id.value() == "root") {
       return application::Result<void>::fail(
@@ -135,7 +233,7 @@ public:
       }
     }
     for (const auto& [nid, note] : notes_) {
-      if (note.folder_id == id) {
+      if (note.folder_id == id && !note.is_trashed()) {
         return application::Result<void>::fail(
             {application::ErrorKind::ValidationFailed, "folder has notes"});
       }
@@ -155,11 +253,13 @@ private:
     s.modified_at_ms = note.modified_at_ms;
     s.revision = note.revision;
     s.pinned = note.pinned;
+    s.trashed_at_ms = note.trashed_at_ms;
     return s;
   }
 
   static std::string to_lower(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (char& c : s)
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
   }
 

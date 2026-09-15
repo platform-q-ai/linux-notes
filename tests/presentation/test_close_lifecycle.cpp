@@ -43,6 +43,17 @@ public:
     return inner_.save(note);
   }
 
+  [[nodiscard]] notes::application::Result<void> trash(
+      const notes::domain::NoteId& id, std::int64_t at) override {
+    return inner_.trash(id, at);
+  }
+
+  [[nodiscard]] notes::application::Result<notes::domain::Note> restore(
+      const notes::domain::NoteId& id,
+      const notes::domain::FolderId& folder) override {
+    return inner_.restore(id, folder);
+  }
+
   [[nodiscard]] notes::application::Result<void> remove(
       const notes::domain::NoteId& id) override {
     return inner_.remove(id);

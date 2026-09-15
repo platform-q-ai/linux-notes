@@ -50,6 +50,21 @@ void run_note_ops(NoteStore& store, const notes::domain::FolderId& folder_id) {
   REQUIRE(found);
   REQUIRE_FALSE(found.value().empty());
 
+  REQUIRE(store.trash(notes::domain::NoteId{"n1"}, 5000));
+  auto trashed = store.load(notes::domain::NoteId{"n1"});
+  REQUIRE(trashed);
+  REQUIRE(trashed.value().is_trashed());
+  auto listed_after = store.list(folder_id);
+  REQUIRE(listed_after);
+  REQUIRE(listed_after.value().empty());
+  auto trash_list = store.list_trashed();
+  REQUIRE(trash_list);
+  REQUIRE(trash_list.value().size() == 1);
+  auto restored = store.restore(notes::domain::NoteId{"n1"}, folder_id);
+  REQUIRE(restored);
+  REQUIRE_FALSE(restored.value().is_trashed());
+
+  REQUIRE(store.trash(notes::domain::NoteId{"n1"}, 6000));
   REQUIRE(store.remove(notes::domain::NoteId{"n1"}));
   REQUIRE_FALSE(store.load(notes::domain::NoteId{"n1"}));
 }

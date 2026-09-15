@@ -7,24 +7,37 @@
 
 namespace notes::presentation {
 
-NoteListViewModel::NoteListViewModel(application::ListNotes& list_notes,
-                                     application::CreateNote& create_note,
-                                     application::DeleteNote& delete_note,
-                                     application::SearchNotes& search_notes,
-                                     UseCaseDispatcher& dispatcher,
-                                     QObject* parent)
+NoteListViewModel::NoteListViewModel(
+    application::ListNotes& list_notes, application::CreateNote& create_note,
+    application::DeleteNote& delete_note,
+    application::SearchNotes& search_notes,
+    application::ListTrashedNotes& list_trashed,
+    application::RestoreNote& restore_note, application::PurgeNote& purge_note,
+    application::MoveNote& move_note, UseCaseDispatcher& dispatcher,
+    QObject* parent)
     : QObject(parent),
       list_notes_(list_notes),
       create_note_(create_note),
       delete_note_(delete_note),
       search_notes_(search_notes),
+      list_trashed_(list_trashed),
+      restore_note_(restore_note),
+      purge_note_(purge_note),
+      move_note_(move_note),
       dispatcher_(dispatcher),
       model_(new NoteListModel(this)) {}
 
 void NoteListViewModel::setFolderId(const QString& id) {
-  if (folder_id_ == id) return;
+  if (folder_id_ == id && !showing_trash_) return;
+  const bool folder_changed = folder_id_ != id;
   folder_id_ = id;
   emit folderIdChanged();
+  if (showing_trash_) {
+    setShowingTrash(false);
+  }
+  if (folder_changed) {
+    clearSelectionQuiet();
+  }
   if (search_query_.trimmed().isEmpty()) refresh();
 }
 
@@ -35,6 +48,20 @@ void NoteListViewModel::setSelectedNoteId(const QString& id) {
   if (!id.isEmpty()) emit openNoteRequested(id);
 }
 
+void NoteListViewModel::clearSelectionQuiet() {
+  if (selected_note_id_.isEmpty()) return;
+  selected_note_id_.clear();
+  emit selectedNoteIdChanged();
+}
+
+void NoteListViewModel::pruneSelectionToModel() {
+  if (selected_note_id_.isEmpty()) return;
+  const domain::NoteId id{selected_note_id_.toStdString()};
+  if (!model_->contains(id)) {
+    clearSelectionQuiet();
+  }
+}
+
 void NoteListViewModel::setSearchQuery(const QString& q) {
   if (search_query_ == q) return;
   search_query_ = q;
@@ -43,6 +70,7 @@ void NoteListViewModel::setSearchQuery(const QString& q) {
     setSearching(false);
     refresh();
   } else {
+    setShowingTrash(false);
     runSearch();
   }
 }
@@ -62,8 +90,55 @@ void NoteListViewModel::setSearching(bool v) {
   searching_ = v;
   emit searchingChanged();
 }
+void NoteListViewModel::setShowingTrash(bool v) {
+  if (showing_trash_ == v) return;
+  showing_trash_ = v;
+  emit showingTrashChanged();
+}
+
+void NoteListViewModel::showTrash() {
+  // Leaving folder/search context: drop selection so editor cannot keep a
+  // live note open while the list shows only trash (or vice versa).
+  clearSelectionQuiet();
+  if (!search_query_.isEmpty()) {
+    search_query_.clear();
+    emit searchQueryChanged();
+    setSearching(false);
+  }
+  setShowingTrash(true);
+  runListTrashed();
+}
+
+void NoteListViewModel::hideTrash() {
+  clearSelectionQuiet();
+  setShowingTrash(false);
+  refresh();
+}
+
+void NoteListViewModel::runListTrashed() {
+  setBusy(true);
+  setError({});
+  const int gen = ++search_generation_;
+  QPointer<NoteListViewModel> self(this);
+  dispatcher_.postResult<application::Result<std::vector<domain::NoteSummary>>>(
+      [this]() { return list_trashed_.execute(); }, this,
+      [self, gen](application::Result<std::vector<domain::NoteSummary>> result) {
+        if (!self || gen != self->search_generation_) return;
+        self->setBusy(false);
+        if (!result) {
+          self->setError(errorText(result.error()));
+          return;
+        }
+        self->model_->setNotes(std::move(result.value()));
+        self->pruneSelectionToModel();
+      });
+}
 
 void NoteListViewModel::refresh() {
+  if (showing_trash_) {
+    runListTrashed();
+    return;
+  }
   if (!search_query_.trimmed().isEmpty()) {
     runSearch();
     return;
@@ -87,6 +162,7 @@ void NoteListViewModel::refresh() {
           return;
         }
         self->model_->setNotes(std::move(result.value()));
+        self->pruneSelectionToModel();
       });
 }
 
@@ -106,11 +182,17 @@ void NoteListViewModel::runSearch() {
           self->setError(errorText(result.error()));
           return;
         }
+        // Store search already excludes trashed_at>0.
         self->model_->setNotes(std::move(result.value()));
+        self->pruneSelectionToModel();
       });
 }
 
 void NoteListViewModel::createNote() {
+  if (showing_trash_) {
+    setError(QStringLiteral("Leave trash before creating a note"));
+    return;
+  }
   if (folder_id_.isEmpty()) {
     setError(QStringLiteral("Select a folder before creating a note"));
     return;
@@ -144,14 +226,16 @@ void NoteListViewModel::createNote() {
         sum.pinned = note.pinned;
         self->model_->upsert(sum);
         const QString id = QString::fromStdString(note.id.value());
-        // Single open path: setSelectedNoteId emits openNoteRequested once.
-        // Main.qml must not also open on noteCreated.
         self->setSelectedNoteId(id);
         emit self->noteCreated(id);
       });
 }
 
 void NoteListViewModel::deleteNote(const QString& noteId) {
+  trashNote(noteId);
+}
+
+void NoteListViewModel::trashNote(const QString& noteId) {
   if (noteId.isEmpty()) return;
   const domain::NoteId id{noteId.toStdString()};
   setBusy(true);
@@ -171,6 +255,87 @@ void NoteListViewModel::deleteNote(const QString& noteId) {
           self->setSelectedNoteId({});
         }
         emit self->noteDeleted(noteId);
+        if (self->showing_trash_) self->refresh();
+      });
+}
+
+void NoteListViewModel::restoreNote(const QString& noteId) {
+  if (noteId.isEmpty()) return;
+  const domain::NoteId id{noteId.toStdString()};
+  setBusy(true);
+  setError({});
+  QPointer<NoteListViewModel> self(this);
+  dispatcher_.postResult<application::Result<domain::Note>>(
+      [this, id]() { return restore_note_.execute(id); }, this,
+      [self, noteId](application::Result<domain::Note> result) {
+        if (!self) return;
+        self->setBusy(false);
+        if (!result) {
+          self->setError(errorText(result.error()));
+          return;
+        }
+        self->model_->removeById(domain::NoteId{noteId.toStdString()});
+        if (self->selected_note_id_ == noteId) {
+          self->setSelectedNoteId({});
+        }
+        emit self->noteRestored(noteId);
+        self->refresh();
+      });
+}
+
+void NoteListViewModel::purgeNote(const QString& noteId) {
+  if (noteId.isEmpty()) return;
+  const domain::NoteId id{noteId.toStdString()};
+  setBusy(true);
+  setError({});
+  QPointer<NoteListViewModel> self(this);
+  dispatcher_.postResult<application::Result<void>>(
+      [this, id]() { return purge_note_.execute(id); }, this,
+      [self, noteId](application::Result<void> result) {
+        if (!self) return;
+        self->setBusy(false);
+        if (!result) {
+          self->setError(errorText(result.error()));
+          return;
+        }
+        self->model_->removeById(domain::NoteId{noteId.toStdString()});
+        if (self->selected_note_id_ == noteId) {
+          self->setSelectedNoteId({});
+        }
+        emit self->notePurged(noteId);
+      });
+}
+
+void NoteListViewModel::moveNote(const QString& noteId,
+                                 const QString& targetFolderId) {
+  if (noteId.isEmpty() || targetFolderId.isEmpty()) return;
+  application::MoveNote::Request req;
+  req.note_id = domain::NoteId{noteId.toStdString()};
+  req.target_folder_id = domain::FolderId{targetFolderId.toStdString()};
+  setBusy(true);
+  setError({});
+  QPointer<NoteListViewModel> self(this);
+  dispatcher_.postResult<application::Result<domain::Note>>(
+      [this, req = std::move(req)]() mutable {
+        return move_note_.execute(std::move(req));
+      },
+      this, [self, noteId, targetFolderId](application::Result<domain::Note> result) {
+        if (!self) return;
+        self->setBusy(false);
+        if (!result) {
+          self->setError(errorText(result.error()));
+          return;
+        }
+        // Drop from current folder list if we moved away.
+        if (!self->showing_trash_ && self->folder_id_ != targetFolderId) {
+          self->model_->removeById(domain::NoteId{noteId.toStdString()});
+          if (self->selected_note_id_ == noteId) {
+            self->setSelectedNoteId({});
+          }
+        } else {
+          self->refresh();
+        }
+        emit self->noteMoved(noteId, targetFolderId);
       });
 }
 
@@ -183,6 +348,8 @@ void NoteListViewModel::selectNoteAt(int row) {
 void NoteListViewModel::applySummaryTitle(const QString& noteId,
                                           const QString& title, qint64 revision,
                                           bool pinned) {
+  // Only touch rows already in the visible list (folder/search/trash). Avoid
+  // inserting a note into the wrong context after move/trash.
   domain::NoteSummary sum;
   sum.id = domain::NoteId{noteId.toStdString()};
   sum.folder_id = domain::FolderId{folder_id_.toStdString()};
@@ -191,7 +358,7 @@ void NoteListViewModel::applySummaryTitle(const QString& noteId,
   sum.revision = revision;
   sum.pinned = pinned;
   sum.modified_at_ms = QDateTime::currentMSecsSinceEpoch();
-  model_->upsert(sum);
+  model_->updateIfPresent(sum);
 }
 
 }  // namespace notes::presentation

@@ -4,6 +4,34 @@
 #include <system_error>
 
 namespace notes::adapters::attachments {
+namespace {
+
+bool path_is_strictly_under(const std::filesystem::path& root,
+                            const std::filesystem::path& candidate) {
+  const auto root_n = root.lexically_normal();
+  const auto cand_n = candidate.lexically_normal();
+  auto root_it = root_n.begin();
+  auto cand_it = cand_n.begin();
+  for (; root_it != root_n.end() && cand_it != cand_n.end();
+       ++root_it, ++cand_it) {
+    if (*root_it != *cand_it) {
+      return false;
+    }
+  }
+  // candidate must be a proper descendant (not equal to root).
+  return root_it == root_n.end() && cand_it != cand_n.end();
+}
+
+std::filesystem::path normalized_absolute(const std::filesystem::path& p) {
+  std::error_code ec;
+  auto abs = std::filesystem::absolute(p, ec);
+  if (ec) {
+    abs = p;
+  }
+  return abs.lexically_normal();
+}
+
+}  // namespace
 
 FilesystemAttachmentStore::FilesystemAttachmentStore(
     std::filesystem::path root, application::Clock& clock)
@@ -12,9 +40,29 @@ FilesystemAttachmentStore::FilesystemAttachmentStore(
   std::filesystem::create_directories(root_, ec);
 }
 
-std::filesystem::path FilesystemAttachmentStore::path_for(
+application::Result<std::filesystem::path>
+FilesystemAttachmentStore::contained_path(
     const domain::AttachmentId& id) const {
-  return root_ / (id.value() + ".bin");
+  // FS seam for untrusted AttachmentId values (markers, anchors, purge GC):
+  // 1) domain opaque-safe token (rejects separators/traversal/absolute/empty)
+  // 2) lexical join under root_ must stay a strict descendant
+  // Callers (get) additionally refuse symlink/non-regular reads so a planted
+  // symlink under root cannot disclose an external target.
+  if (!id.is_opaque_safe()) {
+    return application::Result<std::filesystem::path>::fail(
+        {application::ErrorKind::ValidationFailed,
+         "attachment id is not an opaque safe token"});
+  }
+
+  const auto root_base = normalized_absolute(root_);
+  const auto joined =
+      normalized_absolute(root_ / (id.value() + ".bin"));
+  if (!path_is_strictly_under(root_base, joined)) {
+    return application::Result<std::filesystem::path>::fail(
+        {application::ErrorKind::ValidationFailed,
+         "attachment path escapes store root"});
+  }
+  return application::Result<std::filesystem::path>::ok(joined);
 }
 
 application::Result<domain::Attachment> FilesystemAttachmentStore::put(
@@ -31,7 +79,11 @@ application::Result<domain::Attachment> FilesystemAttachmentStore::put(
   att.byte_size = static_cast<std::int64_t>(bytes.size());
   att.created_at_ms = now;
 
-  const auto dest = path_for(att.id);
+  auto dest_r = contained_path(att.id);
+  if (!dest_r) {
+    return application::Result<domain::Attachment>::fail(dest_r.error());
+  }
+  const auto dest = dest_r.value();
   const auto tmp = dest.string() + ".tmp";
   {
     std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
@@ -60,8 +112,20 @@ application::Result<domain::Attachment> FilesystemAttachmentStore::put(
 
 application::Result<std::vector<std::uint8_t>>
 FilesystemAttachmentStore::get(const domain::AttachmentId& id) const {
-  const auto p = path_for(id);
-  if (!std::filesystem::exists(p)) {
+  auto p_r = contained_path(id);
+  if (!p_r) {
+    return application::Result<std::vector<std::uint8_t>>::fail(p_r.error());
+  }
+  const auto& p = p_r.value();
+  std::error_code ec;
+  // Symlink containment: never read through a symlink. A symlink entry under
+  // root could point at arbitrary external files; treat as invalid blob.
+  if (std::filesystem::is_symlink(p, ec)) {
+    return application::Result<std::vector<std::uint8_t>>::fail(
+        {application::ErrorKind::ValidationFailed,
+         "attachment symlink refused"});
+  }
+  if (!std::filesystem::is_regular_file(p, ec)) {
     return application::Result<std::vector<std::uint8_t>>::fail(
         {application::ErrorKind::NotFound, "attachment not found"});
   }
@@ -83,9 +147,25 @@ FilesystemAttachmentStore::get(const domain::AttachmentId& id) const {
 
 application::Result<void> FilesystemAttachmentStore::remove(
     const domain::AttachmentId& id) {
+  auto p_r = contained_path(id);
+  if (!p_r) {
+    return application::Result<void>::fail(p_r.error());
+  }
+  const auto& p = p_r.value();
   std::error_code ec;
-  std::filesystem::remove(path_for(id), ec);
-  return application::Result<void>::ok();
+  // Unlink only the directory entry under root. For a symlink this removes the
+  // link inode inside the store and does not delete an external target.
+  if (!std::filesystem::exists(p, ec) && !std::filesystem::is_symlink(p, ec)) {
+    return application::Result<void>::ok();
+  }
+  if (std::filesystem::is_symlink(p, ec) ||
+      std::filesystem::is_regular_file(p, ec)) {
+    std::filesystem::remove(p, ec);
+    return application::Result<void>::ok();
+  }
+  return application::Result<void>::fail(
+      {application::ErrorKind::ValidationFailed,
+       "refusing to remove non-regular attachment path"});
 }
 
 }  // namespace notes::adapters::attachments

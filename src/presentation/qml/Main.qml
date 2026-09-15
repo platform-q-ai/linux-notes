@@ -181,6 +181,7 @@ ApplicationWindow {
             onLoaded: {
                 if (!item) return
                 item.folderVm = Qt.binding(function () { return root.folders })
+                item.noteListVm = Qt.binding(function () { return root.notes })
             }
         }
 
@@ -191,7 +192,9 @@ ApplicationWindow {
             onLoaded: {
                 if (!item) return
                 item.noteListVm = Qt.binding(function () { return root.notes })
+                item.folderVm = Qt.binding(function () { return root.folders })
                 item.requestDeleteNote = root.deleteNoteSafely
+                item.requestPurgeNote = root.purgeNoteConfirmed
             }
         }
 
@@ -215,7 +218,45 @@ ApplicationWindow {
             if (!ok)
                 return
         }
+        // Soft-delete into trash (default).
         root.notes.deleteNote(noteId)
+    }
+
+    property string pendingPurgeNoteId: ""
+
+    function purgeNoteConfirmed(noteId) {
+        if (!root.notes || !noteId || noteId.length === 0)
+            return
+        root.pendingPurgeNoteId = noteId
+        purgeConfirmDialog.open()
+    }
+
+    Dialog {
+        id: purgeConfirmDialog
+        title: qsTr("Delete forever?")
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Yes | Dialog.No
+        Label {
+            text: qsTr("Permanently delete this note and its attachments? This cannot be undone.")
+            wrapMode: Text.Wrap
+            width: 320
+        }
+        onAccepted: {
+            if (root.notes && root.pendingPurgeNoteId.length > 0) {
+                // Discard without flush: closeNote flushes dirty body and would
+                // resurrect trash (noteSnapshot historically dropped trashed_at).
+                if (root.editor && root.editor.noteId === root.pendingPurgeNoteId) {
+                    if (root.editor.discardEditorWithoutFlush)
+                        root.editor.discardEditorWithoutFlush()
+                    else
+                        root.editor.closeNote()
+                }
+                root.notes.purgeNote(root.pendingPurgeNoteId)
+            }
+            root.pendingPurgeNoteId = ""
+        }
+        onRejected: root.pendingPurgeNoteId = ""
     }
 
     Component.onCompleted: {
@@ -245,12 +286,38 @@ ApplicationWindow {
             if (root.editor)
                 root.editor.openNote(noteId)
         }
+        function onSelectedNoteIdChanged() {
+            // Coherence: empty selection after trash/move/folder/search must
+            // not leave a stale editor open on a missing note.
+            if (!root.notes || !root.editor)
+                return
+            if (!root.notes.selectedNoteId
+                    || root.notes.selectedNoteId.length === 0) {
+                if (root.editor.noteId && root.editor.noteId.length > 0)
+                    root.editor.closeNote()
+            }
+        }
         function onNoteCreated(noteId) {
             void noteId
         }
         function onNoteDeleted(noteId) {
             if (root.editor && root.editor.noteId === noteId)
                 root.editor.closeNote()
+        }
+        function onNotePurged(noteId) {
+            if (root.editor && root.editor.noteId === noteId)
+                root.editor.closeNote()
+        }
+        function onNoteRestored(noteId) {
+            void noteId
+            if (root.notes)
+                root.notes.refresh()
+        }
+        function onNoteMoved(noteId, folderId) {
+            void noteId
+            void folderId
+            if (root.notes)
+                root.notes.refresh()
         }
     }
 

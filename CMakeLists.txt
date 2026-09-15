@@ -8,9 +8,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
+include(GNUInstallDirs)
+
 option(NOTES_ENABLE_SANITIZERS "Enable ASan/UBSan" OFF)
 option(NOTES_BUILD_TESTS "Build tests" ON)
 option(NOTES_BUILD_UI "Build Qt/QML presentation and desktop" ON)
+option(NOTES_INSTALL_DOCS "Install documentation under share/doc" ON)
 
 if(NOTES_ENABLE_SANITIZERS)
   add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
@@ -94,8 +97,14 @@ if(NOTES_BUILD_UI)
     # Ensure QRC symbols are linked (static lib may drop them)
     src/presentation/qml/presentation_qml.qrc
   )
+  # Dev-only fallback path if qrc load fails during source-tree runs.
+  # Installed binaries rely on embedded qrc (qrc:/notes/Main.qml) and do not
+  # need the source tree or NOTES_QML_DIR at runtime.
   set(NOTES_QML_DIR ${NOTES_SRC}/presentation/qml)
-  target_compile_definitions(notes PRIVATE NOTES_QML_DIR="${NOTES_QML_DIR}")
+  target_compile_definitions(notes PRIVATE
+    NOTES_QML_DIR="${NOTES_QML_DIR}"
+    NOTES_VERSION="${PROJECT_VERSION}"
+  )
   target_include_directories(notes PRIVATE ${NOTES_SRC} ${NOTES_SRC}/desktop)
   target_link_libraries(notes PRIVATE
     notes_domain notes_app
@@ -103,7 +112,29 @@ if(NOTES_BUILD_UI)
     notes_presentation
     Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2
   )
-  install(TARGETS notes RUNTIME DESTINATION bin)
+
+  install(TARGETS notes RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+  install(FILES packaging/linux/linux-notes.desktop
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications)
+
+  foreach(_isz IN ITEMS 16 32 48 64 128 256)
+    install(FILES packaging/icons/hicolor/${_isz}x${_isz}/apps/linux-notes.png
+      DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/${_isz}x${_isz}/apps)
+  endforeach()
+endif()
+
+if(NOTES_INSTALL_DOCS)
+  install(FILES
+    README.md
+    docs/install.md
+    docs/backup-restore.md
+    docs/uninstall.md
+    docs/third-party-notices.md
+    docs/dev-setup.md
+    docs/testing.md
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}
+  )
 endif()
 
 if(NOTES_BUILD_TESTS)

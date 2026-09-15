@@ -11,9 +11,19 @@ namespace notes::application {
 class NoteReader {
 public:
   virtual ~NoteReader() = default;
+  // Loads active or trashed notes (purge/restore need full row).
   [[nodiscard]] virtual Result<domain::Note> load(const domain::NoteId& id) const = 0;
+  // Active notes only (trashed_at = 0) in folder, pinned then modified desc.
   [[nodiscard]] virtual Result<std::vector<domain::NoteSummary>> list(
       const domain::FolderId& folder_id) const = 0;
+  // Trashed notes only, most recently trashed first.
+  [[nodiscard]] virtual Result<std::vector<domain::NoteSummary>> list_trashed()
+      const = 0;
+
+  // All note ids (active + trashed). Used by attachment unref/GC to scan for
+  // shared blob references before deleting filesystem bytes.
+  [[nodiscard]] virtual Result<std::vector<domain::NoteId>> all_note_ids()
+      const = 0;
 };
 
 }  // namespace notes::application

@@ -10,6 +10,7 @@
 namespace notes::adapters::persistence {
 
 // NoteReader + NoteWriter + NoteSearcher; CAS on note.revision as base.
+// Soft-delete via trash/restore; remove is permanent purge only.
 class SqliteNoteStore final : public application::NoteReader,
                               public application::NoteWriter,
                               public application::NoteSearcher {
@@ -22,14 +23,32 @@ public:
   [[nodiscard]] application::Result<std::vector<domain::NoteSummary>> list(
       const domain::FolderId& folder_id) const override;
 
+  [[nodiscard]] application::Result<std::vector<domain::NoteSummary>>
+  list_trashed() const override;
+
+  [[nodiscard]] application::Result<std::vector<domain::NoteId>> all_note_ids()
+      const override;
+
   // CAS: existing.revision must equal note.revision; stored becomes rev+1.
   // Insert requires note.revision == 0 → stored revision 1.
+  // Refuse clearing trash via save (restore only). Trashed rows keep parked
+  // folder_id / trashed_* from storage even if the caller omits them.
   [[nodiscard]] application::Result<domain::Note> save(
       const domain::Note& note) override;
+
+  // Soft-delete + revision bump so pre-trash body saves fail CAS.
+  [[nodiscard]] application::Result<void> trash(
+      const domain::NoteId& id, std::int64_t trashed_at_ms) override;
+
+  // Clear trash flags, place in restore_folder_id, bump revision.
+  [[nodiscard]] application::Result<domain::Note> restore(
+      const domain::NoteId& id,
+      const domain::FolderId& restore_folder_id) override;
 
   [[nodiscard]] application::Result<void> remove(
       const domain::NoteId& id) override;
 
+  // Active notes only (excludes trash).
   [[nodiscard]] application::Result<std::vector<domain::NoteSummary>> search(
       const std::string& query) const override;
 

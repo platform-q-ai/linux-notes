@@ -101,9 +101,38 @@ void run_note_store_contract(Store& store, const char* label) {
     require(found, "search hit");
   }
 
+  // Soft-delete: trash hides from list/search; load still works; purge removes.
   {
+    auto tr = store.trash(id, 9000);
+    require(tr.has_value(), "trash");
+    auto r = store.load(id);
+    require(r.has_value() && r.value().is_trashed(), "load trashed");
+    auto lst = store.list(folder);
+    require(lst.has_value(), "list after trash");
+    for (const auto& s : lst.value()) {
+      require(!(s.id == id), "trashed excluded from list");
+    }
+    auto sr = store.search("updated");
+    require(sr.has_value(), "search after trash");
+    for (const auto& s : sr.value()) {
+      require(!(s.id == id), "trashed excluded from search");
+    }
+    auto trash_list = store.list_trashed();
+    require(trash_list.has_value(), "list_trashed");
+    bool found = false;
+    for (const auto& s : trash_list.value()) {
+      if (s.id == id) found = true;
+    }
+    require(found, "in trash list");
+    auto restored = store.restore(id, folder);
+    require(restored.has_value() && !restored.value().is_trashed(), "restore");
+    require(restored.value().folder_id == folder, "restore folder");
+  }
+
+  {
+    require(store.trash(id, 9100).has_value(), "re-trash");
     auto rm = store.remove(id);
-    require(rm.has_value(), "remove");
+    require(rm.has_value(), "purge remove");
     auto r = store.load(id);
     require(!r.has_value() && r.error().kind == ErrorKind::NotFound, "gone");
   }

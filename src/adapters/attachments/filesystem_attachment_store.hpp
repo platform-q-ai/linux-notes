@@ -4,6 +4,7 @@
 #include "application/ports/clock.hpp"
 
 #include <filesystem>
+#include <optional>
 
 namespace notes::adapters::attachments {
 
@@ -24,7 +25,9 @@ public:
       const domain::AttachmentId& id) override;
 
 private:
-  [[nodiscard]] std::filesystem::path path_for(
+  // FS seam: resolve id to a regular-file path strictly contained under root_.
+  // Rejects unsafe ids, absolute/traversal joins, and symlink escapes.
+  [[nodiscard]] application::Result<std::filesystem::path> contained_path(
       const domain::AttachmentId& id) const;
 
   std::filesystem::path root_;

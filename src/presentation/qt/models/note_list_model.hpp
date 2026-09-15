@@ -28,9 +28,12 @@ public:
 
   void setNotes(std::vector<domain::NoteSummary> notes);
   void upsert(const domain::NoteSummary& summary);
+  // Update existing row only (no insert). Preserves pin sort via upsert path.
+  void updateIfPresent(const domain::NoteSummary& summary);
   void removeById(const domain::NoteId& id);
   [[nodiscard]] domain::NoteId noteIdAt(int row) const;
   [[nodiscard]] int rowForNoteId(const domain::NoteId& id) const;
+  [[nodiscard]] bool contains(const domain::NoteId& id) const;
 
 private:
   void sortInPlace();
