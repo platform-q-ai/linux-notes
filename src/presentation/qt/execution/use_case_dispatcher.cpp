@@ -53,7 +53,7 @@ private:
 UseCaseDispatcher::UseCaseDispatcher(QObject* parent) : QObject(parent) {
   thread_ = new QThread(this);
   thread_->setObjectName(QStringLiteral("notes.io"));
-  worker_ = new IoWorker(this);
+  worker_ = new IoWorker(nullptr);  // no cross-thread parent before moveToThread
   worker_->moveToThread(thread_);
   connect(thread_, &QThread::finished, worker_, &QObject::deleteLater);
   thread_->start();

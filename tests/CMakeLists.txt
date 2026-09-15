@@ -45,3 +45,18 @@ if(TARGET notes_presentation)
   set_tests_properties(test_notes_presentation PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LC_ALL=C.UTF-8")
 endif()
+
+add_executable(test_notes_content_codec adapters/content_codec_test.cpp)
+target_link_libraries(test_notes_content_codec PRIVATE
+  notes_adapters_sqlite notes_domain notes_test_support)
+add_test(NAME test_notes_content_codec COMMAND test_notes_content_codec)
+
+add_executable(test_notes_folder_integrity adapters/folder_integrity_test.cpp)
+target_link_libraries(test_notes_folder_integrity PRIVATE
+  notes_adapters_sqlite notes_test_support)
+add_test(NAME test_notes_folder_integrity COMMAND test_notes_folder_integrity)
+
+add_executable(test_notes_search_failclosed adapters/search_index_failclosed_test.cpp)
+target_link_libraries(test_notes_search_failclosed PRIVATE
+  notes_adapters_sqlite notes_test_support)
+add_test(NAME test_notes_search_failclosed COMMAND test_notes_search_failclosed)

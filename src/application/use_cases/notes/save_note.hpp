@@ -48,7 +48,7 @@ public:
     }
     domain::Note incoming = std::move(req.note);
     const domain::NoteId original_id = incoming.id;
-    incoming.id = domain::NoteId{"note-conflict-" + std::to_string(clock_.now_ms())};
+    incoming.id = domain::NoteId{make_conflict_id(clock_.now_ms())};
     incoming.revision = 0;
     incoming.created_at_ms = clock_.now_ms();
     incoming.modified_at_ms = incoming.created_at_ms;
@@ -68,6 +68,12 @@ public:
   }
 
 private:
+  static std::string make_conflict_id(std::int64_t now_ms) {
+    return "note-conflict-" + std::to_string(now_ms) + "-" +
+           std::to_string(++conflict_seq_);
+  }
+  static inline std::uint64_t conflict_seq_{0};
+
   NoteWriter& writer_;
   NoteReader& reader_;
   Clock& clock_;

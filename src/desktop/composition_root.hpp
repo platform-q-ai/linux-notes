@@ -73,13 +73,8 @@ public:
   }
 
   void flush_and_shutdown() {
-    if (editor_vm_ && dispatcher_ && save_note_) {
-      if (auto req = editor_vm_->pendingSaveRequest()) {
-        dispatcher_->flushAndShutdown([this, req = *std::move(req)]() mutable {
-          (void)save_note_->execute(std::move(req));
-        });
-        return;
-      }
+    if (editor_vm_) {
+      (void)editor_vm_->flushSync();
     }
     if (dispatcher_) {
       dispatcher_->flushAndShutdown();

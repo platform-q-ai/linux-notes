@@ -5,6 +5,7 @@ import QtQuick.Layouts
 Item {
     id: root
     property var noteListVm: null
+    property var requestDeleteNote: null
 
     ColumnLayout {
         anchors.fill: parent
@@ -30,8 +31,13 @@ Item {
                 enabled: !!(root.noteListVm && root.noteListVm.selectedNoteId
                             && root.noteListVm.selectedNoteId.length > 0)
                 onClicked: {
-                    if (root.noteListVm)
-                        root.noteListVm.deleteNote(root.noteListVm.selectedNoteId)
+                    if (!root.noteListVm)
+                        return
+                    var id = root.noteListVm.selectedNoteId
+                    if (typeof root.requestDeleteNote === "function")
+                        root.requestDeleteNote(id)
+                    else
+                        root.noteListVm.deleteNote(id)
                 }
             }
         }

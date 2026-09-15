@@ -179,23 +179,33 @@ application::Result<domain::Note> SqliteNoteStore::save(
         {application::ErrorKind::StorageFailure, db_->last_error()});
   }
 
+  // Search index is part of the same atomic save — fail closed on any error.
   Stmt del_s(db_->handle(), "DELETE FROM notes_search WHERE note_id=?");
-  if (del_s.valid()) {
-    del_s.bind_text(1, note.id.value());
-    (void)del_s.step();
+  if (!del_s.valid()) {
+    (void)db_->rollback();
+    return application::Result<domain::Note>::fail(
+        {application::ErrorKind::StorageFailure, db_->last_error()});
+  }
+  del_s.bind_text(1, note.id.value());
+  if (del_s.step() != SQLITE_DONE) {
+    (void)db_->rollback();
+    return application::Result<domain::Note>::fail(
+        {application::ErrorKind::StorageFailure, db_->last_error()});
   }
   Stmt ins_s(db_->handle(),
              "INSERT INTO notes_search(note_id, search_text) VALUES(?,?)");
-  if (ins_s.valid()) {
-    const auto hay =
-        to_lower(note.title + " " + note.content.plain_text());
-    ins_s.bind_text(1, note.id.value());
-    ins_s.bind_text(2, hay);
-    if (ins_s.step() != SQLITE_DONE) {
-      (void)db_->rollback();
-      return application::Result<domain::Note>::fail(
-          {application::ErrorKind::StorageFailure, db_->last_error()});
-    }
+  if (!ins_s.valid()) {
+    (void)db_->rollback();
+    return application::Result<domain::Note>::fail(
+        {application::ErrorKind::StorageFailure, db_->last_error()});
+  }
+  const auto hay = to_lower(note.title + " " + note.content.plain_text());
+  ins_s.bind_text(1, note.id.value());
+  ins_s.bind_text(2, hay);
+  if (ins_s.step() != SQLITE_DONE) {
+    (void)db_->rollback();
+    return application::Result<domain::Note>::fail(
+        {application::ErrorKind::StorageFailure, db_->last_error()});
   }
 
   auto c = db_->commit();
@@ -224,9 +234,14 @@ application::Result<void> SqliteNoteStore::remove(const domain::NoteId& id) {
         {application::ErrorKind::NotFound, "note not found"});
   }
   Stmt ds(db_->handle(), "DELETE FROM notes_search WHERE note_id=?");
-  if (ds.valid()) {
-    ds.bind_text(1, id.value());
-    (void)ds.step();
+  if (!ds.valid()) {
+    (void)db_->rollback();
+    return fail_storage(*db_);
+  }
+  ds.bind_text(1, id.value());
+  if (ds.step() != SQLITE_DONE) {
+    (void)db_->rollback();
+    return fail_storage(*db_);
   }
   return db_->commit();
 }

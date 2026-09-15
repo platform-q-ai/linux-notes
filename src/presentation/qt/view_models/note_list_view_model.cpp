@@ -144,6 +144,8 @@ void NoteListViewModel::createNote() {
         sum.pinned = note.pinned;
         self->model_->upsert(sum);
         const QString id = QString::fromStdString(note.id.value());
+        // Single open path: setSelectedNoteId emits openNoteRequested once.
+        // Main.qml must not also open on noteCreated.
         self->setSelectedNoteId(id);
         emit self->noteCreated(id);
       });

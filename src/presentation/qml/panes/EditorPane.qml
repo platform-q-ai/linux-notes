@@ -68,18 +68,11 @@ Item {
                 property bool suppress: false
 
                 function applyInline(kind) {
-                    if (selectedText.length === 0)
+                    if (!root.editorVm)
                         return
-                    var t = selectedText
-                    var start = selectionStart
-                    var end = selectionEnd
-                    remove(start, end)
-                    if (kind === "bold")
-                        insert(start, "<b>" + t + "</b>")
-                    else if (kind === "italic")
-                        insert(start, "<i>" + t + "</i>")
-                    else if (kind === "underline")
-                        insert(start, "<u>" + t + "</u>")
+                    if (selectionStart === selectionEnd)
+                        return
+                    root.editorVm.toggleInlineStyle(selectionStart, selectionEnd, kind)
                 }
 
                 Keys.onPressed: function (event) {

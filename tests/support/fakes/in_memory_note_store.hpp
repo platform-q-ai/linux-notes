@@ -119,10 +119,28 @@ public:
 
   [[nodiscard]] application::Result<void> remove(const domain::FolderId& id) override {
     std::lock_guard lock(mu_);
-    if (folders_.erase(id) == 0) {
+    if (id.value() == "root") {
+      return application::Result<void>::fail(
+          {application::ErrorKind::ValidationFailed, "cannot remove root"});
+    }
+    if (folders_.find(id) == folders_.end()) {
       return application::Result<void>::fail(
           {application::ErrorKind::NotFound, "folder not found"});
     }
+    for (const auto& [fid, f] : folders_) {
+      if (f.parent_id && *f.parent_id == id) {
+        return application::Result<void>::fail(
+            {application::ErrorKind::ValidationFailed,
+             "folder has child folders"});
+      }
+    }
+    for (const auto& [nid, note] : notes_) {
+      if (note.folder_id == id) {
+        return application::Result<void>::fail(
+            {application::ErrorKind::ValidationFailed, "folder has notes"});
+      }
+    }
+    folders_.erase(id);
     return application::Result<void>::ok();
   }
 

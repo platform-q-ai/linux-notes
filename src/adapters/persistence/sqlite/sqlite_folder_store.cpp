@@ -116,6 +116,38 @@ application::Result<void> SqliteFolderStore::remove(
   }
   auto begin = db_->begin_immediate();
   if (!begin) return begin;
+
+  Stmt child_folders(
+      db_->handle(),
+      "SELECT 1 FROM folders WHERE parent_id=? LIMIT 1");
+  if (!child_folders.valid()) {
+    (void)db_->rollback();
+    return application::Result<void>::fail(
+        {application::ErrorKind::StorageFailure, db_->last_error()});
+  }
+  child_folders.bind_text(1, id.value());
+  if (child_folders.step() == SQLITE_ROW) {
+    (void)db_->rollback();
+    return application::Result<void>::fail(
+        {application::ErrorKind::ValidationFailed,
+         "folder has child folders; move or delete them first"});
+  }
+
+  Stmt child_notes(db_->handle(),
+                   "SELECT 1 FROM notes WHERE folder_id=? LIMIT 1");
+  if (!child_notes.valid()) {
+    (void)db_->rollback();
+    return application::Result<void>::fail(
+        {application::ErrorKind::StorageFailure, db_->last_error()});
+  }
+  child_notes.bind_text(1, id.value());
+  if (child_notes.step() == SQLITE_ROW) {
+    (void)db_->rollback();
+    return application::Result<void>::fail(
+        {application::ErrorKind::ValidationFailed,
+         "folder still contains notes; move or delete them first"});
+  }
+
   Stmt st(db_->handle(), "DELETE FROM folders WHERE id=?");
   if (!st.valid()) {
     (void)db_->rollback();

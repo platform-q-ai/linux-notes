@@ -1,3 +1,5 @@
+-- Canonical schema for Linux Notes v1 — must match kSchemaV1 in sqlite_db.cpp.
+
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -8,8 +10,11 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 CREATE TABLE IF NOT EXISTS folders (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  parent_id TEXT NOT NULL,
-  sort_order INTEGER NOT NULL DEFAULT 0
+  parent_id TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL DEFAULT 0,
+  modified_at INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (parent_id) REFERENCES folders(id)
 );
 
 CREATE TABLE IF NOT EXISTS notes (
@@ -27,7 +32,8 @@ CREATE TABLE IF NOT EXISTS notes (
 CREATE INDEX IF NOT EXISTS idx_notes_folder ON notes(folder_id);
 CREATE INDEX IF NOT EXISTS idx_notes_modified ON notes(modified_at DESC);
 
-CREATE TABLE IF NOT EXISTS notes_fts_meta (
+CREATE TABLE IF NOT EXISTS notes_search (
   note_id TEXT PRIMARY KEY,
-  search_text TEXT NOT NULL
+  search_text TEXT NOT NULL,
+  FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
 );
