@@ -27,6 +27,10 @@ domain::Note row_to_note(Stmt& st) {
   n.modified_at_ms = st.column_int64(5);
   n.revision = st.column_int64(6);
   n.pinned = st.column_int64(7) != 0;
+  n.trashed_at_ms = st.column_int64(8);
+  if (!st.column_is_null(9) && !st.column_text(9).empty()) {
+    n.trashed_from_folder_id = domain::FolderId{st.column_text(9)};
+  }
   return n;
 }
 
@@ -38,6 +42,7 @@ domain::NoteSummary row_to_summary(Stmt& st) {
   s.modified_at_ms = st.column_int64(3);
   s.revision = st.column_int64(4);
   s.pinned = st.column_int64(5) != 0;
+  s.trashed_at_ms = st.column_int64(6);
   return s;
 }
 
@@ -46,6 +51,10 @@ application::Result<void> fail_storage(const SqliteDb& db) {
       {application::ErrorKind::StorageFailure, db.last_error()});
 }
 
+constexpr const char* kNoteSelect =
+    "SELECT id,folder_id,title,body,created_at,modified_at,revision,"
+    "pinned,trashed_at,trashed_from_folder_id FROM notes WHERE id=?";
+
 }  // namespace
 
 SqliteNoteStore::SqliteNoteStore(std::shared_ptr<SqliteDb> db)
@@ -53,9 +62,7 @@ SqliteNoteStore::SqliteNoteStore(std::shared_ptr<SqliteDb> db)
 
 application::Result<domain::Note> SqliteNoteStore::load(
     const domain::NoteId& id) const {
-  Stmt st(db_->handle(),
-          "SELECT id,folder_id,title,body,created_at,modified_at,revision,"
-          "pinned FROM notes WHERE id=?");
+  Stmt st(db_->handle(), kNoteSelect);
   if (!st.valid()) {
     return application::Result<domain::Note>::fail(
         {application::ErrorKind::StorageFailure, db_->last_error()});
@@ -76,13 +83,37 @@ application::Result<domain::Note> SqliteNoteStore::load(
 application::Result<std::vector<domain::NoteSummary>> SqliteNoteStore::list(
     const domain::FolderId& folder_id) const {
   Stmt st(db_->handle(),
-          "SELECT id,folder_id,title,modified_at,revision,pinned FROM notes "
-          "WHERE folder_id=? ORDER BY pinned DESC, modified_at DESC");
+          "SELECT id,folder_id,title,modified_at,revision,pinned,trashed_at "
+          "FROM notes WHERE folder_id=? AND trashed_at=0 "
+          "ORDER BY pinned DESC, modified_at DESC");
   if (!st.valid()) {
     return application::Result<std::vector<domain::NoteSummary>>::fail(
         {application::ErrorKind::StorageFailure, db_->last_error()});
   }
   st.bind_text(1, folder_id.value());
+  std::vector<domain::NoteSummary> out;
+  while (true) {
+    const int rc = st.step();
+    if (rc == SQLITE_DONE) break;
+    if (rc != SQLITE_ROW) {
+      return application::Result<std::vector<domain::NoteSummary>>::fail(
+          {application::ErrorKind::StorageFailure, db_->last_error()});
+    }
+    out.push_back(row_to_summary(st));
+  }
+  return application::Result<std::vector<domain::NoteSummary>>::ok(
+      std::move(out));
+}
+
+application::Result<std::vector<domain::NoteSummary>>
+SqliteNoteStore::list_trashed() const {
+  Stmt st(db_->handle(),
+          "SELECT id,folder_id,title,modified_at,revision,pinned,trashed_at "
+          "FROM notes WHERE trashed_at>0 ORDER BY trashed_at DESC");
+  if (!st.valid()) {
+    return application::Result<std::vector<domain::NoteSummary>>::fail(
+        {application::ErrorKind::StorageFailure, db_->last_error()});
+  }
   std::vector<domain::NoteSummary> out;
   while (true) {
     const int rc = st.step();
@@ -124,7 +155,8 @@ application::Result<domain::Note> SqliteNoteStore::save(
     stored.revision = note.revision + 1;
     Stmt upd(db_->handle(),
              "UPDATE notes SET folder_id=?, title=?, body=?, modified_at=?, "
-             "revision=?, pinned=? WHERE id=? AND revision=?");
+             "revision=?, pinned=?, trashed_at=?, trashed_from_folder_id=? "
+             "WHERE id=? AND revision=?");
     if (!upd.valid()) {
       (void)db_->rollback();
       return application::Result<domain::Note>::fail(
@@ -137,8 +169,14 @@ application::Result<domain::Note> SqliteNoteStore::save(
     upd.bind_int64(4, note.modified_at_ms);
     upd.bind_int64(5, stored.revision);
     upd.bind_int64(6, note.pinned ? 1 : 0);
-    upd.bind_text(7, note.id.value());
-    upd.bind_int64(8, current_rev);
+    upd.bind_int64(7, note.trashed_at_ms);
+    if (note.trashed_from_folder_id && !note.trashed_from_folder_id->empty()) {
+      upd.bind_text(8, note.trashed_from_folder_id->value());
+    } else {
+      upd.bind_null(8);
+    }
+    upd.bind_text(9, note.id.value());
+    upd.bind_int64(10, current_rev);
     if (upd.step() != SQLITE_DONE || sqlite3_changes(db_->handle()) != 1) {
       (void)db_->rollback();
       return application::Result<domain::Note>::fail(
@@ -153,7 +191,8 @@ application::Result<domain::Note> SqliteNoteStore::save(
     stored.revision = 1;
     Stmt ins(db_->handle(),
              "INSERT INTO notes(id,folder_id,title,body,created_at,modified_at,"
-             "revision,pinned) VALUES(?,?,?,?,?,?,?,?)");
+             "revision,pinned,trashed_at,trashed_from_folder_id) "
+             "VALUES(?,?,?,?,?,?,?,?,?,?)");
     if (!ins.valid()) {
       (void)db_->rollback();
       return application::Result<domain::Note>::fail(
@@ -168,6 +207,12 @@ application::Result<domain::Note> SqliteNoteStore::save(
     ins.bind_int64(6, note.modified_at_ms);
     ins.bind_int64(7, stored.revision);
     ins.bind_int64(8, note.pinned ? 1 : 0);
+    ins.bind_int64(9, note.trashed_at_ms);
+    if (note.trashed_from_folder_id && !note.trashed_from_folder_id->empty()) {
+      ins.bind_text(10, note.trashed_from_folder_id->value());
+    } else {
+      ins.bind_null(10);
+    }
     if (ins.step() != SQLITE_DONE) {
       (void)db_->rollback();
       return application::Result<domain::Note>::fail(
@@ -180,6 +225,7 @@ application::Result<domain::Note> SqliteNoteStore::save(
   }
 
   // Search index is part of the same atomic save — fail closed on any error.
+  // Trashed notes keep index rows for restore; search() filters trashed_at.
   Stmt del_s(db_->handle(), "DELETE FROM notes_search WHERE note_id=?");
   if (!del_s.valid()) {
     (void)db_->rollback();
@@ -213,6 +259,132 @@ application::Result<domain::Note> SqliteNoteStore::save(
     return application::Result<domain::Note>::fail(c.error());
   }
   return application::Result<domain::Note>::ok(std::move(stored));
+}
+
+application::Result<void> SqliteNoteStore::trash(const domain::NoteId& id,
+                                                 std::int64_t trashed_at_ms) {
+  if (trashed_at_ms <= 0) {
+    return application::Result<void>::fail(
+        {application::ErrorKind::ValidationFailed,
+         "trashed_at_ms must be positive"});
+  }
+  auto begin = db_->begin_immediate();
+  if (!begin) return begin;
+
+  Stmt sel(db_->handle(),
+           "SELECT folder_id, trashed_at FROM notes WHERE id=?");
+  if (!sel.valid()) {
+    (void)db_->rollback();
+    return fail_storage(*db_);
+  }
+  sel.bind_text(1, id.value());
+  const int rc = sel.step();
+  if (rc == SQLITE_DONE) {
+    (void)db_->rollback();
+    return application::Result<void>::fail(
+        {application::ErrorKind::NotFound, "note not found"});
+  }
+  if (rc != SQLITE_ROW) {
+    (void)db_->rollback();
+    return fail_storage(*db_);
+  }
+  const auto folder = sel.column_text(0);
+  const auto already = sel.column_int64(1);
+  if (already > 0) {
+    // Idempotent: already trashed.
+    (void)db_->rollback();
+    return application::Result<void>::ok();
+  }
+
+  // Park under root so the prior folder can still be deleted without orphans;
+  // list/search already exclude trashed_at>0.
+  Stmt upd(db_->handle(),
+           "UPDATE notes SET trashed_at=?, trashed_from_folder_id=?, "
+           "folder_id='root', modified_at=? WHERE id=? AND trashed_at=0");
+  if (!upd.valid()) {
+    (void)db_->rollback();
+    return fail_storage(*db_);
+  }
+  upd.bind_int64(1, trashed_at_ms);
+  upd.bind_text(2, folder);
+  upd.bind_int64(3, trashed_at_ms);
+  upd.bind_text(4, id.value());
+  if (upd.step() != SQLITE_DONE || sqlite3_changes(db_->handle()) != 1) {
+    (void)db_->rollback();
+    return application::Result<void>::fail(
+        {application::ErrorKind::StorageFailure, "trash update missed"});
+  }
+  return db_->commit();
+}
+
+application::Result<domain::Note> SqliteNoteStore::restore(
+    const domain::NoteId& id, const domain::FolderId& restore_folder_id) {
+  auto begin = db_->begin_immediate();
+  if (!begin) {
+    return application::Result<domain::Note>::fail(begin.error());
+  }
+
+  Stmt sel(db_->handle(),
+           "SELECT trashed_at FROM notes WHERE id=?");
+  if (!sel.valid()) {
+    (void)db_->rollback();
+    return application::Result<domain::Note>::fail(
+        {application::ErrorKind::StorageFailure, db_->last_error()});
+  }
+  sel.bind_text(1, id.value());
+  const int rc = sel.step();
+  if (rc == SQLITE_DONE) {
+    (void)db_->rollback();
+    return application::Result<domain::Note>::fail(
+        {application::ErrorKind::NotFound, "note not found"});
+  }
+  if (rc != SQLITE_ROW) {
+    (void)db_->rollback();
+    return application::Result<domain::Note>::fail(
+        {application::ErrorKind::StorageFailure, db_->last_error()});
+  }
+  if (sel.column_int64(0) <= 0) {
+    (void)db_->rollback();
+    return application::Result<domain::Note>::fail(
+        {application::ErrorKind::ValidationFailed, "note is not in trash"});
+  }
+
+  // Verify target folder exists before rewrite.
+  Stmt fchk(db_->handle(), "SELECT 1 FROM folders WHERE id=?");
+  if (!fchk.valid()) {
+    (void)db_->rollback();
+    return application::Result<domain::Note>::fail(
+        {application::ErrorKind::StorageFailure, db_->last_error()});
+  }
+  fchk.bind_text(1, restore_folder_id.value());
+  if (fchk.step() != SQLITE_ROW) {
+    (void)db_->rollback();
+    return application::Result<domain::Note>::fail(
+        {application::ErrorKind::NotFound, "restore folder not found"});
+  }
+
+  Stmt upd(db_->handle(),
+           "UPDATE notes SET folder_id=?, trashed_at=0, "
+           "trashed_from_folder_id=NULL, "
+           "modified_at=CAST(strftime('%s','now') AS INTEGER)*1000 "
+           "WHERE id=? AND trashed_at>0");
+  if (!upd.valid()) {
+    (void)db_->rollback();
+    return application::Result<domain::Note>::fail(
+        {application::ErrorKind::StorageFailure, db_->last_error()});
+  }
+  upd.bind_text(1, restore_folder_id.value());
+  upd.bind_text(2, id.value());
+  if (upd.step() != SQLITE_DONE || sqlite3_changes(db_->handle()) != 1) {
+    (void)db_->rollback();
+    return application::Result<domain::Note>::fail(
+        {application::ErrorKind::StorageFailure, "restore update missed"});
+  }
+  auto c = db_->commit();
+  if (!c) {
+    return application::Result<domain::Note>::fail(c.error());
+  }
+  return load(id);
 }
 
 application::Result<void> SqliteNoteStore::remove(const domain::NoteId& id) {
@@ -249,9 +421,10 @@ application::Result<void> SqliteNoteStore::remove(const domain::NoteId& id) {
 application::Result<std::vector<domain::NoteSummary>>
 SqliteNoteStore::search(const std::string& query) const {
   Stmt st(db_->handle(),
-          "SELECT n.id,n.folder_id,n.title,n.modified_at,n.revision,n.pinned "
+          "SELECT n.id,n.folder_id,n.title,n.modified_at,n.revision,n.pinned,"
+          "n.trashed_at "
           "FROM notes n JOIN notes_search s ON s.note_id=n.id "
-          "WHERE s.search_text LIKE ? "
+          "WHERE n.trashed_at=0 AND s.search_text LIKE ? "
           "ORDER BY n.pinned DESC, n.modified_at DESC LIMIT 100");
   if (!st.valid()) {
     return application::Result<std::vector<domain::NoteSummary>>::fail(

@@ -4,6 +4,7 @@
 #include "domain/folders/folder_id.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -18,6 +19,12 @@ struct Note {
   std::int64_t modified_at_ms{0};
   std::int64_t revision{0};
   bool pinned{false};
+  // Soft-delete: trashed_at_ms > 0 means the note is in trash.
+  std::int64_t trashed_at_ms{0};
+  // Folder the note lived in when trashed (restore target). Empty if never trashed.
+  std::optional<FolderId> trashed_from_folder_id;
+
+  [[nodiscard]] bool is_trashed() const noexcept { return trashed_at_ms > 0; }
 };
 
 struct NoteSummary {
@@ -28,6 +35,9 @@ struct NoteSummary {
   std::int64_t modified_at_ms{0};
   std::int64_t revision{0};
   bool pinned{false};
+  std::int64_t trashed_at_ms{0};
+
+  [[nodiscard]] bool is_trashed() const noexcept { return trashed_at_ms > 0; }
 };
 
 }  // namespace notes::domain

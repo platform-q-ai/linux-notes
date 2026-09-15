@@ -13,7 +13,12 @@ int main(int argc, char* argv[]) {
   QGuiApplication app(argc, argv);
   QGuiApplication::setApplicationName(QStringLiteral("Linux Notes"));
   QGuiApplication::setOrganizationName(QStringLiteral("platform-q-ai"));
+  QGuiApplication::setDesktopFileName(QStringLiteral("linux-notes"));
+#if defined(NOTES_VERSION)
+  QGuiApplication::setApplicationVersion(QStringLiteral(NOTES_VERSION));
+#else
   QGuiApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+#endif
 
   const auto paths = notes::adapters::system::resolve_app_paths("linux-notes");
 

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Linux Notes
+GenericName=Notes
+Comment=Local-only notes for Linux (no accounts or cloud)
+Exec=notes
+Icon=linux-notes
+Terminal=false
+Categories=Office;Utility;TextEditor;
+Keywords=notes;memo;checklist;
+StartupNotify=true
+# XDG desktop entry; install under share/applications

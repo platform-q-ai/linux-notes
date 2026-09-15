@@ -33,11 +33,22 @@ cmake --build build-san
 ## Run
 
 ```bash
-export QT_QPA_PLATFORM=xcb   # or wayland; offscreen for smoke only
+export QT_QPA_PLATFORM=offscreen   # headless process smoke only
 ./build/notes
+# Real display sessions: set QT_QPA_PLATFORM=xcb or wayland only when that
+# platform is actually available; do not claim on-screen verification from CI.
 ```
 
-Data directory: `$XDG_DATA_HOME/linux-notes` (default `~/.local/share/linux-notes`) with `notes.db` and `attachments/`.
+Data directory: `$XDG_DATA_HOME/linux-notes` (default `~/.local/share/linux-notes`) with `notes.db` and `attachments/` (`{id}.bin` blobs; not content-addressed).
+
+QML is embedded via `presentation_qml.qrc`. Source builds may fall back to
+`NOTES_QML_DIR` (compile definition pointing at `src/presentation/qml`) if qrc
+load fails. Installed binaries must not depend on the source tree.
+
+## Install / packaging baseline
+
+See [install.md](install.md), [backup-restore.md](backup-restore.md),
+[uninstall.md](uninstall.md), [third-party-notices.md](third-party-notices.md).
 
 ## Architecture check
 

@@ -1,8 +1,9 @@
--- Canonical on-disk shape for Linux Notes (schema_migrations version = 2).
+-- Canonical on-disk shape for Linux Notes (schema_migrations version = 3).
 -- Applied via versioned migrate() in sqlite_db.cpp:
 --   v1: folders + notes + indexes + root seed
 --   v2: notes_search (+ FK) and backfill; repairs prior-PR DBs stamped v1
 --       without a usable search index. Never silently deletes user notes.
+--   v3: soft-delete columns trashed_at + trashed_from_folder_id (non-destructive).
 
 PRAGMA foreign_keys = ON;
 
@@ -30,11 +31,14 @@ CREATE TABLE IF NOT EXISTS notes (
   modified_at INTEGER NOT NULL,
   revision INTEGER NOT NULL,
   pinned INTEGER NOT NULL DEFAULT 0,
+  trashed_at INTEGER NOT NULL DEFAULT 0,
+  trashed_from_folder_id TEXT,
   FOREIGN KEY (folder_id) REFERENCES folders(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_notes_folder ON notes(folder_id);
 CREATE INDEX IF NOT EXISTS idx_notes_modified ON notes(modified_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notes_trashed ON notes(trashed_at);
 
 CREATE TABLE IF NOT EXISTS notes_search (
   note_id TEXT PRIMARY KEY,

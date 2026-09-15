@@ -110,14 +110,35 @@ void build_legacy_v1_without_search(const std::filesystem::path& path) {
   sqlite3_close(raw);
 }
 
+bool column_exists(sqlite3* db, const char* table, const char* column) {
+  std::string sql = std::string("PRAGMA table_info(") + table + ")";
+  sqlite3_stmt* st = nullptr;
+  require(sqlite3_prepare_v2(db, sql.c_str(), -1, &st, nullptr) == SQLITE_OK,
+          "prep table_info");
+  bool found = false;
+  while (sqlite3_step(st) == SQLITE_ROW) {
+    const auto* name =
+        reinterpret_cast<const char*>(sqlite3_column_text(st, 1));
+    if (name && std::string(name) == column) {
+      found = true;
+      break;
+    }
+  }
+  sqlite3_finalize(st);
+  return found;
+}
+
 void test_fresh_db_reaches_latest() {
   using namespace notes;
   const auto path = temp_db("fresh.db");
   adapters::persistence::SqliteDb db;
   require(static_cast<bool>(db.open(path)), "open fresh");
-  require(schema_version(db.handle()) == 2, "latest version 2");
+  require(schema_version(db.handle()) == 3, "latest version 3");
   require(table_exists(db.handle(), "notes_search"), "search present");
   require(table_exists(db.handle(), "folders"), "folders");
+  require(column_exists(db.handle(), "notes", "trashed_at"), "trashed_at");
+  require(column_exists(db.handle(), "notes", "trashed_from_folder_id"),
+          "trashed_from");
   require(count_sql(db.handle(), "SELECT COUNT(*) FROM folders WHERE id='root'") == 1,
           "root seeded");
 }
@@ -131,10 +152,15 @@ void test_legacy_v1_upgrades_and_backfills_search() {
   auto opened = db.open(path);
   require(static_cast<bool>(opened),
           opened ? "open ok" : opened.error().message.c_str());
-  require(schema_version(db.handle()) == 2, "upgraded to v2");
+  require(schema_version(db.handle()) == 3, "upgraded to v3");
   require(table_exists(db.handle(), "notes_search"), "search created");
+  require(column_exists(db.handle(), "notes", "trashed_at"), "trash col");
   require(count_sql(db.handle(), "SELECT COUNT(*) FROM notes") == 1,
           "note preserved");
+  require(count_sql(db.handle(),
+                    "SELECT COUNT(*) FROM notes WHERE id='legacy-1' AND trashed_at=0") ==
+              1,
+          "legacy note remains active");
   require(count_sql(db.handle(),
                     "SELECT COUNT(*) FROM notes_search WHERE note_id='legacy-1'") ==
               1,
@@ -268,11 +294,206 @@ void test_idempotent_reopen() {
   {
     adapters::persistence::SqliteDb db;
     require(static_cast<bool>(db.open(path)), "first");
-    require(schema_version(db.handle()) == 2, "v2");
+    require(schema_version(db.handle()) == 3, "v3");
   }
   adapters::persistence::SqliteDb db2;
   require(static_cast<bool>(db2.open(path)), "second");
-  require(schema_version(db2.handle()) == 2, "still v2");
+  require(schema_version(db2.handle()) == 3, "still v3");
+}
+
+void test_v2_upgrades_to_v3_preserves_notes() {
+  using namespace notes;
+  const auto path = temp_db("v2-to-v3.db");
+  // Build a stamped-v2 DB without trash columns (prior daily-driver shape).
+  {
+    adapters::persistence::SqliteDb db;
+    require(static_cast<bool>(db.open(path)), "seed open to latest then rewind");
+  }
+  sqlite3* raw = nullptr;
+  require(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK, "raw");
+  char* err = nullptr;
+  auto exec = [&](const char* sql) {
+    require(sqlite3_exec(raw, sql, nullptr, nullptr, &err) == SQLITE_OK,
+            err ? err : sql);
+  };
+  // Drop v3 stamp and columns if present to simulate pure v2.
+  exec("DELETE FROM schema_migrations WHERE version>=3;");
+  // Rebuild notes without trash columns; drop search first (FK → notes).
+  exec("PRAGMA foreign_keys=OFF;");
+  exec("DROP TABLE IF EXISTS notes_search;");
+  exec("ALTER TABLE notes RENAME TO notes_old;");
+  exec(
+      "CREATE TABLE notes ("
+      "  id TEXT PRIMARY KEY,"
+      "  folder_id TEXT NOT NULL,"
+      "  title TEXT NOT NULL DEFAULT '',"
+      "  body BLOB NOT NULL,"
+      "  created_at INTEGER NOT NULL,"
+      "  modified_at INTEGER NOT NULL,"
+      "  revision INTEGER NOT NULL,"
+      "  pinned INTEGER NOT NULL DEFAULT 0,"
+      "  FOREIGN KEY (folder_id) REFERENCES folders(id)"
+      ");");
+  exec(
+      "INSERT INTO notes(id,folder_id,title,body,created_at,modified_at,revision,pinned) "
+      "SELECT id,folder_id,title,body,created_at,modified_at,revision,pinned FROM notes_old;");
+  exec("DROP TABLE notes_old;");
+  exec(
+      "INSERT INTO notes(id,folder_id,title,body,created_at,modified_at,revision,pinned) "
+      "VALUES('keep-me','root','Keep','body',1,1,1,0);");
+  // Recreate a v2-style search table without full rebuild of FTS; migrate will
+  // ensure_notes_search_canonical.
+  exec(
+      "CREATE TABLE notes_search ("
+      "  note_id TEXT PRIMARY KEY,"
+      "  search_text TEXT NOT NULL,"
+      "  FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE"
+      ");");
+  exec(
+      "INSERT INTO notes_search(note_id, search_text) "
+      "SELECT id, lower(title || ' ' || CAST(body AS TEXT)) FROM notes;");
+  exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(2, 1);");
+  exec("PRAGMA foreign_keys=ON;");
+  require(schema_version(raw) == 2, "stamped v2");
+  require(!column_exists(raw, "notes", "trashed_at"), "no trash yet");
+  sqlite3_close(raw);
+
+  adapters::persistence::SqliteDb db;
+  auto opened = db.open(path);
+  require(static_cast<bool>(opened),
+          opened ? "ok" : opened.error().message.c_str());
+  require(schema_version(db.handle()) == 3, "now v3");
+  require(column_exists(db.handle(), "notes", "trashed_at"), "trash added");
+  require(count_sql(db.handle(), "SELECT COUNT(*) FROM notes WHERE id='keep-me'") == 1,
+          "note survived");
+  require(count_sql(db.handle(),
+                    "SELECT COUNT(*) FROM notes WHERE id='keep-me' AND trashed_at=0") == 1,
+          "active");
+}
+
+// Attachment identities live in note body blobs (filesystem store is external).
+// Upgrade must not rewrite/lose ATT refs in structured content.
+void test_v1_to_v3_preserves_attachment_ref_in_body() {
+  using namespace notes;
+  const auto path = temp_db("v1-att-ref.db");
+  build_legacy_v1_without_search(path);
+  // Overwrite legacy-1 body with structured content containing ATT id.
+  {
+    sqlite3* raw = nullptr;
+    require(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK, "raw");
+    const std::string blob =
+        "V1\nPARA\nSPAN 0 0 0 4:text\nEND\n"
+        "ATT att-survive-1 9:photo.png\nEND\n"
+        "CHECK\nITEM 0 4:todo\nEND\n";
+    sqlite3_stmt* st = nullptr;
+    require(sqlite3_prepare_v2(
+                raw, "UPDATE notes SET body=? WHERE id='legacy-1'", -1, &st,
+                nullptr) == SQLITE_OK,
+            "prep body");
+    sqlite3_bind_blob(st, 1, blob.data(), static_cast<int>(blob.size()),
+                      SQLITE_TRANSIENT);
+    require(sqlite3_step(st) == SQLITE_DONE, "upd body");
+    sqlite3_finalize(st);
+    sqlite3_close(raw);
+  }
+
+  auto db = std::make_shared<adapters::persistence::SqliteDb>();
+  auto opened = db->open(path);
+  require(static_cast<bool>(opened),
+          opened ? "ok" : opened.error().message.c_str());
+  require(schema_version(db->handle()) == 3, "v3");
+  adapters::persistence::SqliteNoteStore store(db);
+  auto loaded = store.load(domain::NoteId{std::string{"legacy-1"}});
+  require(loaded.has_value(), "load");
+  bool att_ok = false;
+  bool check_ok = false;
+  for (const auto& b : loaded.value().content.blocks()) {
+    if (const auto* a = std::get_if<domain::AttachmentRefBlock>(&b)) {
+      att_ok = a->attachment_id.value() == "att-survive-1" &&
+               a->display_name == "photo.png";
+    }
+    if (std::holds_alternative<domain::ChecklistBlock>(b)) check_ok = true;
+  }
+  require(att_ok, "attachment id survived migration");
+  require(check_ok, "checklist survived migration");
+  require(!loaded.value().is_trashed(), "still active");
+}
+
+// Refused opens must not advance schema_migrations on the source file.
+void test_failed_migrate_leaves_prior_version_stamp() {
+  using namespace notes;
+  const auto path = temp_db("fail-stamp.db");
+  {
+    adapters::persistence::SqliteDb db;
+    require(static_cast<bool>(db.open(path)), "seed v3");
+    require(schema_version(db.handle()) == 3, "v3");
+  }
+  // Stamp a future version without changing tables.
+  {
+    sqlite3* raw = nullptr;
+    require(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK, "raw");
+    char* err = nullptr;
+    require(sqlite3_exec(raw,
+                         "INSERT INTO schema_migrations(version, applied_at) "
+                         "VALUES(999, 42);",
+                         nullptr, nullptr, &err) == SQLITE_OK,
+            err ? err : "future");
+    require(schema_version(raw) == 999, "stamped future");
+    // User note still present
+    require(count_sql(raw, "SELECT COUNT(*) FROM notes") >= 0, "notes table");
+    sqlite3_close(raw);
+  }
+  {
+    adapters::persistence::SqliteDb db;
+    auto opened = db.open(path);
+    require(!opened.has_value(), "refuse future");
+  }
+  // On-disk stamp unchanged (no silent downgrade / rewrite).
+  {
+    sqlite3* raw = nullptr;
+    require(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK, "reopen raw");
+    require(schema_version(raw) == 999, "stamp preserved after refuse");
+    require(table_exists(raw, "notes"), "notes intact");
+    require(table_exists(raw, "folders"), "folders intact");
+    sqlite3_close(raw);
+  }
+}
+
+// Mid-upgrade failure: force apply path to fail after begin by using partial
+// legacy mismatch (folders without notes) — version stays 0, no half tables.
+void test_partial_mismatch_does_not_stamp_version() {
+  using namespace notes;
+  const auto path = temp_db("partial-no-stamp.db");
+  {
+    sqlite3* raw = nullptr;
+    require(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK, "raw");
+    char* err = nullptr;
+    auto exec = [&](const char* sql) {
+      require(sqlite3_exec(raw, sql, nullptr, nullptr, &err) == SQLITE_OK,
+              err ? err : sql);
+    };
+    exec("CREATE TABLE folders (id TEXT PRIMARY KEY, name TEXT NOT NULL);");
+    exec("INSERT INTO folders(id,name) VALUES('root','Notes');");
+    // No schema_migrations, no notes → partial mismatch
+    sqlite3_close(raw);
+  }
+  {
+    adapters::persistence::SqliteDb db;
+    auto opened = db.open(path);
+    require(!opened.has_value(), "refused");
+  }
+  {
+    sqlite3* raw = nullptr;
+    require(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK, "raw2");
+    // migrations table may be created outside txn for bookkeeping, but no
+    // successful version stamp for a completed schema.
+    if (table_exists(raw, "schema_migrations")) {
+      require(schema_version(raw) == 0, "no version stamped");
+    }
+    require(table_exists(raw, "folders"), "preexisting folder kept");
+    require(!table_exists(raw, "notes"), "did not invent notes");
+    sqlite3_close(raw);
+  }
 }
 
 }  // namespace
@@ -287,6 +508,10 @@ int main() {
     test_future_version_refused();
     test_partial_legacy_mismatch_refused();
     test_idempotent_reopen();
+    test_v2_upgrades_to_v3_preserves_notes();
+    test_v1_to_v3_preserves_attachment_ref_in_body();
+    test_failed_migrate_leaves_prior_version_stamp();
+    test_partial_mismatch_does_not_stamp_version();
     std::cerr << "migration_test PASS\n";
   } catch (const std::exception& ex) {
     std::cerr << "migration_test FAIL: " << ex.what() << "\n";
@@ -294,3 +519,4 @@ int main() {
   }
   return 0;
 }
+

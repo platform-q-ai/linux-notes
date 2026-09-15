@@ -5,6 +5,7 @@ import QtQuick.Layouts
 Item {
     id: root
     property var folderVm: null
+    property var noteListVm: null
     // Optional external sink if Main does not bind Connections.
     property var onSelect: null
 
@@ -24,9 +25,22 @@ Item {
                 onClicked: newFolderDialog.open()
             }
             ToolButton {
+                text: qsTr("Ren")
+                enabled: !!(root.folderVm && root.folderVm.selectedFolderId
+                            && root.folderVm.selectedFolderId.length > 0
+                            && root.folderVm.selectedFolderId !== "root")
+                onClicked: {
+                    if (!root.folderVm)
+                        return
+                    renameField.text = ""
+                    renameFolderDialog.open()
+                }
+            }
+            ToolButton {
                 text: qsTr("Del")
                 enabled: !!(root.folderVm && root.folderVm.selectedFolderId
-                            && root.folderVm.selectedFolderId.length > 0)
+                            && root.folderVm.selectedFolderId.length > 0
+                            && root.folderVm.selectedFolderId !== "root")
                 onClicked: {
                     if (root.folderVm)
                         root.folderVm.deleteFolder(root.folderVm.selectedFolderId)
@@ -47,11 +61,24 @@ Item {
                 required property string parentId
                 text: (parentId && parentId.length ? "  " : "") + name
                 highlighted: !!(root.folderVm
-                                && root.folderVm.selectedFolderId === folderId)
+                                && root.folderVm.selectedFolderId === folderId
+                                && !(root.noteListVm && root.noteListVm.showingTrash))
                 onClicked: {
+                    if (root.noteListVm && root.noteListVm.showingTrash)
+                        root.noteListVm.hideTrash()
                     if (root.folderVm)
                         root.folderVm.selectedFolderId = folderId
                 }
+            }
+        }
+
+        ItemDelegate {
+            Layout.fillWidth: true
+            text: qsTr("🗑 Trash")
+            highlighted: !!(root.noteListVm && root.noteListVm.showingTrash)
+            onClicked: {
+                if (root.noteListVm)
+                    root.noteListVm.showTrash()
             }
         }
 
@@ -81,6 +108,28 @@ Item {
                 root.folderVm.createFolder(nameField.text.trim(),
                                            root.folderVm.selectedFolderId)
             nameField.text = ""
+        }
+    }
+
+    Dialog {
+        id: renameFolderDialog
+        title: qsTr("Rename folder")
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        anchors.centerIn: parent
+        TextField {
+            id: renameField
+            placeholderText: qsTr("New name")
+            width: parent ? parent.width : 200
+        }
+        onAccepted: {
+            if (root.folderVm && renameField.text.trim().length > 0
+                    && root.folderVm.selectedFolderId
+                    && root.folderVm.selectedFolderId !== "root") {
+                root.folderVm.renameFolder(root.folderVm.selectedFolderId,
+                                           renameField.text.trim())
+            }
+            renameField.text = ""
         }
     }
 }

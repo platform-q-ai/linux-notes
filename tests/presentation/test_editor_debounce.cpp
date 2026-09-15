@@ -4,7 +4,11 @@
 #include "application/use_cases/notes/create_note.hpp"
 #include "application/use_cases/notes/delete_note.hpp"
 #include "application/use_cases/notes/list_notes.hpp"
+#include "application/use_cases/notes/list_trashed_notes.hpp"
 #include "application/use_cases/notes/load_note.hpp"
+#include "application/use_cases/notes/move_note.hpp"
+#include "application/use_cases/notes/purge_note.hpp"
+#include "application/use_cases/notes/restore_note.hpp"
 #include "application/use_cases/notes/save_note.hpp"
 #include "application/use_cases/notes/search_notes.hpp"
 #include "application/ports/notes/note_writer.hpp"
@@ -39,6 +43,16 @@ public:
       const notes::domain::Note&) override {
     return notes::application::Result<notes::domain::Note>::fail(
         {notes::application::ErrorKind::StorageFailure, "injected failure"});
+  }
+  [[nodiscard]] notes::application::Result<void> trash(
+      const notes::domain::NoteId&, std::int64_t) override {
+    return notes::application::Result<void>::ok();
+  }
+  [[nodiscard]] notes::application::Result<notes::domain::Note> restore(
+      const notes::domain::NoteId&,
+      const notes::domain::FolderId&) override {
+    return notes::application::Result<notes::domain::Note>::fail(
+        {notes::application::ErrorKind::NotFound, "n/a"});
   }
   [[nodiscard]] notes::application::Result<void> remove(
       const notes::domain::NoteId&) override {
@@ -414,11 +428,16 @@ TEST_CASE("P12 createNote emits single openNoteRequested",
 
   notes::application::ListNotes list{store};
   notes::application::CreateNote create{store, clock};
-  notes::application::DeleteNote del{store};
+  notes::application::DeleteNote del{store, clock};
   notes::application::SearchNotes search{store};
+  notes::application::ListTrashedNotes list_trashed{store};
+  notes::application::RestoreNote restore{store, store, store};
+  notes::application::PurgeNote purge{store, store, nullptr};
+  notes::application::MoveNote move{store, store, store, clock};
   notes::presentation::UseCaseDispatcher dispatcher;
-  notes::presentation::NoteListViewModel notes_vm{list, create, del, search,
-                                                  dispatcher};
+  notes::presentation::NoteListViewModel notes_vm{
+      list, create, del, search, list_trashed, restore, purge, move,
+      dispatcher};
   notes_vm.setFolderId(QString::fromStdString(folder.id.value()));
   pump(10);
 

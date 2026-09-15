@@ -55,6 +55,17 @@ if(TARGET notes_presentation)
   add_test(NAME test_notes_close_lifecycle COMMAND test_notes_close_lifecycle)
   set_tests_properties(test_notes_close_lifecycle PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LC_ALL=C.UTF-8")
+
+  # Structured content mapper: checklist/attachment roundtrip fidelity.
+  add_executable(test_notes_content_mapper presentation/test_note_content_mapper.cpp)
+  target_include_directories(test_notes_content_mapper PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
+  target_link_libraries(test_notes_content_mapper PRIVATE
+    notes_presentation notes_app notes_test_support notes_catch2
+    Qt6::Core Qt6::Gui Qt6::Test)
+  add_test(NAME test_notes_content_mapper COMMAND test_notes_content_mapper)
+  set_tests_properties(test_notes_content_mapper PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LC_ALL=C.UTF-8")
 endif()
 
 add_executable(test_notes_content_codec adapters/content_codec_test.cpp)
@@ -81,3 +92,77 @@ add_test(NAME test_notes_migration COMMAND test_notes_migration)
 add_executable(test_notes_conflict_ids application/use_cases/conflict_id_test.cpp)
 target_link_libraries(test_notes_conflict_ids PRIVATE notes_app notes_test_support)
 add_test(NAME test_notes_conflict_ids COMMAND test_notes_conflict_ids)
+
+# Persistence + toggle structured content roundtrip (Task 8 helper / regression).
+add_executable(test_notes_structured_roundtrip adapters/structured_roundtrip_test.cpp)
+target_link_libraries(test_notes_structured_roundtrip PRIVATE
+  notes_adapters_sqlite notes_app notes_test_support)
+add_test(NAME test_notes_structured_roundtrip COMMAND test_notes_structured_roundtrip)
+
+# Soft-delete trash / restore / purge + move (Task 4).
+add_executable(test_notes_trash adapters/trash_restore_purge_test.cpp)
+target_link_libraries(test_notes_trash PRIVATE
+  notes_adapters_sqlite notes_app notes_test_support)
+add_test(NAME test_notes_trash COMMAND test_notes_trash)
+
+add_executable(test_notes_trash_uc application/use_cases/trash_note_test.cpp)
+target_link_libraries(test_notes_trash_uc PRIVATE notes_app notes_test_support)
+add_test(NAME test_notes_trash_uc COMMAND test_notes_trash_uc)
+
+if(TARGET notes_presentation)
+  add_executable(test_notes_editor_attach_checklist
+    presentation/test_editor_attach_checklist.cpp)
+  target_include_directories(test_notes_editor_attach_checklist PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
+  target_link_libraries(test_notes_editor_attach_checklist PRIVATE
+    notes_presentation notes_app notes_adapters_attachments notes_test_support
+    notes_catch2 Qt6::Core Qt6::Gui Qt6::Test)
+  add_test(NAME test_notes_editor_attach_checklist
+           COMMAND test_notes_editor_attach_checklist)
+  set_tests_properties(test_notes_editor_attach_checklist PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LC_ALL=C.UTF-8")
+
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/presentation/test_rapid_switch.cpp)
+    add_executable(test_notes_rapid_switch presentation/test_rapid_switch.cpp)
+    target_include_directories(test_notes_rapid_switch PRIVATE
+      ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
+    target_link_libraries(test_notes_rapid_switch PRIVATE
+      notes_presentation notes_app notes_test_support notes_catch2
+      Qt6::Core Qt6::Test)
+    add_test(NAME test_notes_rapid_switch COMMAND test_notes_rapid_switch)
+    set_tests_properties(test_notes_rapid_switch PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LC_ALL=C.UTF-8")
+  endif()
+
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/presentation/test_search_list_pin_coherence.cpp)
+    add_executable(test_notes_search_list_pin_coherence
+      presentation/test_search_list_pin_coherence.cpp)
+    target_include_directories(test_notes_search_list_pin_coherence PRIVATE
+      ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
+    target_link_libraries(test_notes_search_list_pin_coherence PRIVATE
+      notes_presentation notes_app notes_test_support notes_catch2
+      Qt6::Core Qt6::Test)
+    add_test(NAME test_notes_search_list_pin_coherence
+             COMMAND test_notes_search_list_pin_coherence)
+    set_tests_properties(test_notes_search_list_pin_coherence PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LC_ALL=C.UTF-8")
+  endif()
+endif()
+
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/adapters/trash_lifecycle_sqlite_test.cpp)
+  add_executable(test_notes_trash_lifecycle_sqlite
+    adapters/trash_lifecycle_sqlite_test.cpp)
+  target_link_libraries(test_notes_trash_lifecycle_sqlite PRIVATE
+    notes_adapters_sqlite notes_app notes_test_support)
+  add_test(NAME test_notes_trash_lifecycle_sqlite
+           COMMAND test_notes_trash_lifecycle_sqlite)
+endif()
+
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/adapters/migration_v3_integrity_test.cpp)
+  add_executable(test_notes_migration_v3_integrity
+    adapters/migration_v3_integrity_test.cpp)
+  target_link_libraries(test_notes_migration_v3_integrity PRIVATE
+    notes_adapters_sqlite notes_test_support)
+  add_test(NAME test_notes_migration_v3_integrity
+           COMMAND test_notes_migration_v3_integrity)
+endif()

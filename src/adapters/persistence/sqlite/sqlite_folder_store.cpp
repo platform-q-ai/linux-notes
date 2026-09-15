@@ -133,8 +133,11 @@ application::Result<void> SqliteFolderStore::remove(
          "folder has child folders; move or delete them first"});
   }
 
-  Stmt child_notes(db_->handle(),
-                   "SELECT 1 FROM notes WHERE folder_id=? LIMIT 1");
+  // Only active notes block folder delete. Trashed notes are parked under root
+  // and must not silently vanish with the folder.
+  Stmt child_notes(
+      db_->handle(),
+      "SELECT 1 FROM notes WHERE folder_id=? AND trashed_at=0 LIMIT 1");
   if (!child_notes.valid()) {
     (void)db_->rollback();
     return application::Result<void>::fail(
