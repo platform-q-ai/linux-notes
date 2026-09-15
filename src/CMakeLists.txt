@@ -1,0 +1,17 @@
+add_subdirectory(domain)
+add_subdirectory(application)
+add_subdirectory(adapters)
+
+# Presentation/desktop need Qt6; skip when unavailable so core/storage builds.
+option(NOTES_BUILD_UI "Build Qt/QML presentation and desktop" ON)
+if(NOTES_BUILD_UI AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/presentation/CMakeLists.txt")
+  find_package(Qt6 QUIET COMPONENTS Core Gui Qml Quick)
+  if(Qt6_FOUND)
+    add_subdirectory(presentation)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/desktop/CMakeLists.txt")
+      add_subdirectory(desktop)
+    endif()
+  else()
+    message(WARNING "Qt6 not found; skipping presentation/desktop (core only)")
+  endif()
+endif()

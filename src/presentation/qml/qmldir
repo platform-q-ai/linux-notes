@@ -1,0 +1,6 @@
+module Notes
+Main 1.0 Main.qml
+FolderPane 1.0 panes/FolderPane.qml
+NoteListPane 1.0 panes/NoteListPane.qml
+EditorPane 1.0 panes/EditorPane.qml
+SaveStateBadge 1.0 components/SaveStateBadge.qml

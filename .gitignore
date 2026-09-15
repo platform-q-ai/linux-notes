@@ -1,0 +1,10 @@
+/build/
+/build-*/
+/cmake-build-*/
+/.cache/
+/.quecto/
+aqtinstall.log
+compile_commands.json
+*.user
+*.autosave
+CMakeUserPresets.json

@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  architecture-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: architecture-check
+        run: bash scripts/architecture_check.sh
+
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config \
+            qt6-base-dev qt6-declarative-dev qt6-tools-dev \
+            libsqlite3-dev libgl1-mesa-dev libxkbcommon-dev \
+            libdbus-1-dev xvfb
+      - name: Configure
+        run: |
+          cmake -G Ninja -S . -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DNOTES_BUILD_TESTS=ON \
+            -DNOTES_ENABLE_SANITIZERS=ON \
+            -DNOTES_BUILD_UI=ON
+      - name: Build core tests
+        run: |
+          cmake --build build --target \
+            test_notes_domain test_notes_save_note test_notes_store_contract \
+            notes_adapters_sqlite || cmake --build build
+      - name: Test (headless, not visual smoke)
+        env:
+          QT_QPA_PLATFORM: offscreen
+          LC_ALL: C.UTF-8
+          ASAN_OPTIONS: detect_leaks=1
+        run: ctest --test-dir build --output-on-failure
+
