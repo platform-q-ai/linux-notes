@@ -46,5 +46,14 @@ QT_QPA_PLATFORM=offscreen ASAN_OPTIONS=detect_leaks=1 \
 ## Architecture check
 ```bash
 bash scripts/architecture_check.sh
+bash scripts/architecture/run_violation_tests.sh
 ```
+
+## Backup / restore recipe regression
+Fail-closed documented tar recipe (optional config dir; require `notes.db` in archive):
+```bash
+bash scripts/test_backup_restore_recipe.sh
+```
+CI runs this on the `architecture-check` job (no Qt required).
+
 CI job name: `architecture-check` (preserve). Test job name: `test` (preserve).

@@ -20,6 +20,10 @@ jobs:
         # Fixtures must fail the checker; clean tree must pass. No ignore lists.
         # Includes application-sqlite-include among positive violation proofs.
         run: bash scripts/architecture/run_violation_tests.sh
+      - name: backup-restore-recipe-regression
+        # F3 documented fail-closed tar recipe (scripts/test_backup_restore_recipe.sh).
+        # No Qt required; keep on architecture-check job.
+        run: bash scripts/test_backup_restore_recipe.sh
 
   test:
     runs-on: ubuntu-24.04
