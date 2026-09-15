@@ -1,10 +1,14 @@
 #pragma once
 #include "application/ports/clock.hpp"
+#include "application/ports/id_source.hpp"
 #include "application/ports/notes/note_reader.hpp"
 #include "application/ports/notes/note_writer.hpp"
 #include "application/result.hpp"
 #include "domain/notes/note.hpp"
 
+#include <array>
+#include <cstdint>
+#include <random>
 #include <string>
 #include <utility>
 
@@ -13,8 +17,11 @@ namespace notes::application {
 // Application owns timestamps, revision bump, and keep-both on RevisionConflict.
 class SaveNote {
 public:
-  SaveNote(NoteWriter& writer, NoteReader& reader, Clock& clock)
-      : writer_(writer), reader_(reader), clock_(clock) {}
+  // id_source optional: when null, a process CSPRNG token is used (restart/multi-
+  // instance safe). Inject a custom IdSource for tests or host-provided identity.
+  SaveNote(NoteWriter& writer, NoteReader& reader, Clock& clock,
+           IdSource* id_source = nullptr)
+      : writer_(writer), reader_(reader), clock_(clock), id_source_(id_source) {}
 
   struct Request {
     domain::Note note;           // includes base revision
@@ -68,15 +75,48 @@ public:
   }
 
 private:
-  static std::string make_conflict_id(std::int64_t now_ms) {
-    return "note-conflict-" + std::to_string(now_ms) + "-" +
-           std::to_string(++conflict_seq_);
+  [[nodiscard]] std::string next_token() {
+    if (id_source_ != nullptr) {
+      return id_source_->next_unique_token();
+    }
+    return default_random_token();
   }
-  static inline std::uint64_t conflict_seq_{0};
+
+  static std::string default_random_token() {
+    // Mix random_device entropy with a process-boot salt so two instances at the
+    // same clock tick (and after "restart" of static state) still diverge.
+    // seed_seq must be an lvalue — mt19937_64 ctor takes non-const seed_seq&.
+    thread_local std::random_device rd;
+    thread_local const std::uint64_t boot_salt =
+        (static_cast<std::uint64_t>(rd()) << 32) ^ static_cast<std::uint64_t>(rd());
+    thread_local std::seed_seq seed{
+        static_cast<std::uint32_t>(boot_salt),
+        static_cast<std::uint32_t>(boot_salt >> 32), rd(), rd()};
+    thread_local std::mt19937_64 gen{seed};
+    std::array<std::uint8_t, 16> bytes{};
+    for (auto& b : bytes) {
+      b = static_cast<std::uint8_t>(gen() & 0xffu);
+    }
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string out(bytes.size() * 2, '0');
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+      out[i * 2] = kHex[(bytes[i] >> 4) & 0xf];
+      out[i * 2 + 1] = kHex[bytes[i] & 0xf];
+    }
+    return out;
+  }
+
+  std::string make_conflict_id(std::int64_t now_ms) {
+    // Format: note-conflict-{ms}-{token}. Token is not a process-local counter;
+    // it is entropy (or injected identity), so restarts/multi-instance at the
+    // same ms do not collide.
+    return "note-conflict-" + std::to_string(now_ms) + "-" + next_token();
+  }
 
   NoteWriter& writer_;
   NoteReader& reader_;
   Clock& clock_;
+  IdSource* id_source_{nullptr};
 };
 
 }  // namespace notes::application

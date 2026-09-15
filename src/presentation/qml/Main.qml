@@ -13,7 +13,46 @@ ApplicationWindow {
     property var folders: typeof folderVm !== "undefined" ? folderVm : null
     property var notes: typeof noteListVm !== "undefined" ? noteListVm : null
     property var editor: typeof editorVm !== "undefined" ? editorVm : null
+    // Context property is exitGate; local alias avoids shadowing.
+    property var gate: typeof exitGate !== "undefined" ? exitGate : null
     property string keepBothMessage: ""
+    property string closeFailMessage: ""
+    property bool allowClose: false
+
+    // Veto normal window/app close when pending flush fails. aboutToQuit is too late.
+    onClosing: function (close) {
+        if (root.allowClose)
+            return
+        var g = root.gate
+        if (!g) {
+            // Fallback: flush editor directly if gate not wired.
+            if (root.editor && (root.editor.dirty || root.editor.saving)) {
+                var ok = root.editor.flushPendingSavesBlocking()
+                if (!ok) {
+                    close.accepted = false
+                    root.closeFailMessage = root.editor.errorString.length > 0
+                            ? qsTr("Could not save your note: %1").arg(root.editor.errorString)
+                            : qsTr("Could not save your note. The window will stay open so you can retry.")
+                    return
+                }
+            }
+            root.allowClose = true
+            return
+        }
+        if (g.quitAuthorized) {
+            root.allowClose = true
+            return
+        }
+        var flushed = g.requestClose()
+        if (!flushed) {
+            close.accepted = false
+            root.closeFailMessage = g.blockReason
+            return
+        }
+        root.allowClose = true
+        root.closeFailMessage = ""
+        // requestClose authorized quit; accept this close event.
+    }
 
     header: ToolBar {
         ColumnLayout {
@@ -77,6 +116,57 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
             }
+
+            Rectangle {
+                id: closeFailBanner
+                visible: root.closeFailMessage.length > 0
+                color: "#f8d7da"
+                radius: 3
+                Layout.fillWidth: true
+                implicitHeight: closeFailRow.implicitHeight + 8
+
+                RowLayout {
+                    id: closeFailRow
+                    anchors.fill: parent
+                    anchors.margins: 4
+                    spacing: 8
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.closeFailMessage
+                        color: "#721c24"
+                        wrapMode: Text.Wrap
+                    }
+                    Button {
+                        text: qsTr("Retry save & quit")
+                        onClicked: {
+                            var g = root.gate
+                            var ok = false
+                            if (g)
+                                ok = g.retryClose()
+                            else if (root.editor)
+                                ok = root.editor.flushPendingSavesBlocking()
+                            if (ok) {
+                                root.closeFailMessage = ""
+                                root.allowClose = true
+                                root.close()
+                            } else if (g) {
+                                root.closeFailMessage = g.blockReason
+                            } else if (root.editor) {
+                                root.closeFailMessage = root.editor.errorString
+                            }
+                        }
+                    }
+                    Button {
+                        text: qsTr("Keep editing")
+                        onClicked: {
+                            if (root.gate)
+                                root.gate.acknowledgeBlock()
+                            root.closeFailMessage = ""
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -129,6 +219,8 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
+        if (typeof exitGate !== "undefined" && exitGate)
+            root.gate = exitGate
         if (root.folders)
             root.folders.refresh()
         if (root.notes)
@@ -175,6 +267,18 @@ ApplicationWindow {
             if (root.notes)
                 root.notes.refresh()
             keepBothClear.restart()
+        }
+    }
+
+    Connections {
+        target: root.gate
+        enabled: root.gate !== null
+        ignoreUnknownSignals: true
+        function onCloseFailed(reason) {
+            root.closeFailMessage = reason
+        }
+        function onCloseSucceeded() {
+            root.closeFailMessage = ""
         }
     }
 

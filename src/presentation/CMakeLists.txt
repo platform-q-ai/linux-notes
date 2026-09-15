@@ -7,6 +7,7 @@ set(CMAKE_AUTORCC ON)
 
 add_library(notes_presentation
   qt/execution/use_case_dispatcher.cpp
+  qt/app_exit_gate.cpp
   qt/models/folder_tree_model.cpp
   qt/models/note_list_model.cpp
   qt/mapping/note_content_document_mapper.cpp

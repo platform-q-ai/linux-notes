@@ -25,10 +25,21 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
+  // aboutToQuit cannot veto exit; AppExitGate/requestClose is the real gate.
+  // This handler only drains the dispatcher after an authorized close, or
+  // makes a best-effort flush if something forced the event loop to stop.
   QObject::connect(&app, &QGuiApplication::aboutToQuit, [&] {
-    if (root) {
-      root->flush_and_shutdown();
+    if (!root) {
+      return;
     }
+    if (auto* gate = root->exit_gate()) {
+      if (!gate->quitAuthorized()) {
+        (void)gate->flushBestEffort();
+      }
+      gate->completeShutdown();
+      return;
+    }
+    root->flush_and_shutdown();
   });
 
   QQmlApplicationEngine engine;
@@ -48,7 +59,8 @@ int main(int argc, char* argv[]) {
     std::cerr << "Failed to load QML UI\n";
     return 2;
   }
-  notes::presentation::bindRootViewModels(engine.rootObjects().constFirst(), root->folders(),
-                                          root->notes(), root->editor());
+  notes::presentation::bindRootViewModels(
+      engine.rootObjects().constFirst(), root->folders(), root->notes(),
+      root->editor(), root->exit_gate());
   return app.exec();
 }

@@ -4,6 +4,7 @@
 #include "adapters/persistence/sqlite/sqlite_db.hpp"
 #include "adapters/persistence/sqlite/sqlite_folder_store.hpp"
 #include "adapters/persistence/sqlite/sqlite_note_store.hpp"
+#include "adapters/system/random_id_source.hpp"
 #include "adapters/system/system_clock.hpp"
 #include "adapters/system/xdg_storage_paths.hpp"
 #include "application/use_cases/folders/create_folder.hpp"
@@ -16,6 +17,7 @@
 #include "application/use_cases/notes/load_note.hpp"
 #include "application/use_cases/notes/save_note.hpp"
 #include "application/use_cases/notes/search_notes.hpp"
+#include "presentation/qt/app_exit_gate.hpp"
 #include "presentation/qt/execution/use_case_dispatcher.hpp"
 #include "presentation/qt/qml_support.hpp"
 #include "presentation/qt/view_models/editor_view_model.hpp"
@@ -48,7 +50,8 @@ public:
 
     create_note_ = std::make_unique<application::CreateNote>(*note_store_, clock_);
     load_note_ = std::make_unique<application::LoadNote>(*note_store_);
-    save_note_ = std::make_unique<application::SaveNote>(*note_store_, *note_store_, clock_);
+    save_note_ = std::make_unique<application::SaveNote>(*note_store_, *note_store_,
+                                                         clock_, &id_source_);
     list_notes_ = std::make_unique<application::ListNotes>(*note_store_);
     search_notes_ = std::make_unique<application::SearchNotes>(*note_store_);
     delete_note_ = std::make_unique<application::DeleteNote>(*note_store_);
@@ -65,14 +68,23 @@ public:
         *list_notes_, *create_note_, *delete_note_, *search_notes_, *dispatcher_);
     editor_vm_ = std::make_unique<presentation::EditorViewModel>(
         *load_note_, *save_note_, *dispatcher_);
+    exit_gate_ = std::make_unique<presentation::AppExitGate>(editor_vm_.get(),
+                                                             dispatcher_.get());
   }
 
   void register_qml(QQmlApplicationEngine& engine) {
     presentation::registerQmlTypes();
-    presentation::exposeToQml(engine, folder_vm_.get(), note_list_vm_.get(), editor_vm_.get());
+    presentation::exposeToQml(engine, folder_vm_.get(), note_list_vm_.get(),
+                              editor_vm_.get(), exit_gate_.get());
   }
 
+  // aboutToQuit safety net only — cannot veto exit. Prefer AppExitGate::requestClose.
   void flush_and_shutdown() {
+    if (exit_gate_) {
+      (void)exit_gate_->flushBestEffort();
+      exit_gate_->completeShutdown();
+      return;
+    }
     if (editor_vm_) {
       (void)editor_vm_->flushSync();
     }
@@ -81,9 +93,18 @@ public:
     }
   }
 
+  // Returns false when flush fails: caller must keep the app alive.
+  bool request_close() {
+    if (!exit_gate_) {
+      return true;
+    }
+    return exit_gate_->requestClose();
+  }
+
   presentation::FolderTreeViewModel* folders() const { return folder_vm_.get(); }
   presentation::NoteListViewModel* notes() const { return note_list_vm_.get(); }
   presentation::EditorViewModel* editor() const { return editor_vm_.get(); }
+  presentation::AppExitGate* exit_gate() const { return exit_gate_.get(); }
 
 private:
   void ensure_default_folder() {
@@ -104,6 +125,7 @@ private:
 
   adapters::system::AppPaths paths_;
   adapters::system::SystemClock clock_;
+  adapters::system::RandomIdSource id_source_;
   std::shared_ptr<adapters::persistence::SqliteDb> db_;
   std::unique_ptr<adapters::persistence::SqliteNoteStore> note_store_;
   std::unique_ptr<adapters::persistence::SqliteFolderStore> folder_store_;
@@ -122,6 +144,7 @@ private:
   std::unique_ptr<presentation::FolderTreeViewModel> folder_vm_;
   std::unique_ptr<presentation::NoteListViewModel> note_list_vm_;
   std::unique_ptr<presentation::EditorViewModel> editor_vm_;
+  std::unique_ptr<presentation::AppExitGate> exit_gate_;
 };
 
 }  // namespace notes

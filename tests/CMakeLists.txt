@@ -44,6 +44,17 @@ if(TARGET notes_presentation)
   add_test(NAME test_notes_presentation COMMAND test_notes_presentation)
   set_tests_properties(test_notes_presentation PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LC_ALL=C.UTF-8")
+
+  # Close/quit lifecycle: AppExitGate vetoes normal close on failed flushSync.
+  add_executable(test_notes_close_lifecycle presentation/test_close_lifecycle.cpp)
+  target_include_directories(test_notes_close_lifecycle PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
+  target_link_libraries(test_notes_close_lifecycle PRIVATE
+    notes_presentation notes_app notes_test_support notes_catch2
+    Qt6::Core Qt6::Test)
+  add_test(NAME test_notes_close_lifecycle COMMAND test_notes_close_lifecycle)
+  set_tests_properties(test_notes_close_lifecycle PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LC_ALL=C.UTF-8")
 endif()
 
 add_executable(test_notes_content_codec adapters/content_codec_test.cpp)
@@ -60,3 +71,13 @@ add_executable(test_notes_search_failclosed adapters/search_index_failclosed_tes
 target_link_libraries(test_notes_search_failclosed PRIVATE
   notes_adapters_sqlite notes_test_support)
 add_test(NAME test_notes_search_failclosed COMMAND test_notes_search_failclosed)
+
+
+add_executable(test_notes_migration adapters/migration_test.cpp)
+target_link_libraries(test_notes_migration PRIVATE
+  notes_adapters_sqlite notes_test_support)
+add_test(NAME test_notes_migration COMMAND test_notes_migration)
+
+add_executable(test_notes_conflict_ids application/use_cases/conflict_id_test.cpp)
+target_link_libraries(test_notes_conflict_ids PRIVATE notes_app notes_test_support)
+add_test(NAME test_notes_conflict_ids COMMAND test_notes_conflict_ids)

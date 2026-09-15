@@ -1,4 +1,8 @@
--- Canonical schema for Linux Notes v1 — must match kSchemaV1 in sqlite_db.cpp.
+-- Canonical on-disk shape for Linux Notes (schema_migrations version = 2).
+-- Applied via versioned migrate() in sqlite_db.cpp:
+--   v1: folders + notes + indexes + root seed
+--   v2: notes_search (+ FK) and backfill; repairs prior-PR DBs stamped v1
+--       without a usable search index. Never silently deletes user notes.
 
 PRAGMA foreign_keys = ON;
 

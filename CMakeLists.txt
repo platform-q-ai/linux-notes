@@ -67,6 +67,8 @@ if(NOTES_BUILD_UI)
   add_library(notes_presentation
     src/presentation/qt/execution/use_case_dispatcher.cpp
     src/presentation/qt/execution/use_case_dispatcher.hpp
+    src/presentation/qt/app_exit_gate.cpp
+    src/presentation/qt/app_exit_gate.hpp
     src/presentation/qt/models/folder_tree_model.cpp
     src/presentation/qt/models/folder_tree_model.hpp
     src/presentation/qt/models/note_list_model.cpp

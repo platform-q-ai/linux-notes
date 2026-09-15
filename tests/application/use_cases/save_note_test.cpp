@@ -91,7 +91,11 @@ int main() {
         require(out.has_value() && out.value().kept_both, "kb ok");
         const auto& id = out.value().saved.id.value();
         require(ids.insert(id).second, "unique conflict id");
-        require(id.find("note-conflict-42-") == 0, "ms+seq form");
+        require(id.find("note-conflict-42-") == 0, "ms+token form");
+        // Suffix after final '-' is entropy/identity, not a bare process counter.
+        const auto dash = id.find_last_of('-');
+        require(dash != std::string::npos && id.size() > dash + 8,
+                "non-trivial token suffix");
       }
       require(ids.size() == 2, "two distinct ids");
     }
