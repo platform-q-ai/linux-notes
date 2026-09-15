@@ -55,7 +55,18 @@ else
   ok "domain has no sqlite"
 fi
 
-# 5) Domain free of iostream / filesystem IO seams
+# 5) Application free of sqlite (ports/use-cases must not couple to DB headers)
+# Restores origin/main application sqlite ban lost when the thin entrypoint
+# delegated to this canonical checker.
+if rg -n --glob '*.{h,hpp,c,cpp}' \
+  '#\s*include\s*[<"]sqlite3\.h[>"]|sqlite3\.h|<sqlite' \
+  src/application 2>/dev/null; then
+  bad "application includes sqlite"
+else
+  ok "application has no sqlite"
+fi
+
+# 6) Domain free of iostream / filesystem IO seams
 if rg -n --glob '*.{h,hpp,c,cpp}' \
   '#\s*include\s*[<"](fstream|filesystem|sqlite3)' \
   src/domain 2>/dev/null; then
@@ -64,7 +75,7 @@ else
   ok "domain has no fstream/filesystem/sqlite includes"
 fi
 
-# 6) Production src must not reference test fakes
+# 7) Production src must not reference test fakes
 if rg -n --glob '*.{h,hpp,c,cpp}' 'InMemoryNoteStore|tests/support' src 2>/dev/null; then
   bad "production src references test support/fakes"
 else

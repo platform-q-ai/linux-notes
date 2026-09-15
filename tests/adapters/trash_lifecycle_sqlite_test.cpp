@@ -65,6 +65,74 @@ void test_trash_hides_from_list_and_search() {
           "body kept in trash");
 }
 
+// F1 regression: trash must be durable against a stale editor body-save that still
+// carries pre-trash revision and trashed_at_ms=0 (would otherwise clear trash cols).
+void test_stale_body_save_cannot_resurrect_trashed_note() {
+  Env env("trash-stale-save.db");
+  auto saved = env.seed_structured("resurrect-1");
+  const auto pre_trash_rev = saved.revision;
+  require(pre_trash_rev > 0, "seeded revision");
+
+  notes::application::TrashNote trash{env.notes, env.clock};
+  require(trash.execute(saved.id).has_value(), "trash");
+
+  auto after_trash = env.notes.load(saved.id);
+  require(after_trash.has_value() && after_trash.value().is_trashed(),
+          "trashed before stale save");
+  const auto trashed_at = after_trash.value().trashed_at_ms;
+  require(trashed_at > 0, "trashed_at set");
+  require(after_trash.value().revision == pre_trash_rev + 1,
+          "trash bumps revision");
+
+  // Simulate editor flush with pre-trash snapshot (active trashed_at, same rev).
+  notes::domain::Note stale = saved;
+  stale.title = "stale body save";
+  stale.content = notes::domain::NoteContent::from_plain_text("should not untrash");
+  stale.modified_at_ms = trashed_at + 1;
+  stale.revision = pre_trash_rev;
+  stale.trashed_at_ms = 0;
+  stale.trashed_from_folder_id = std::nullopt;
+
+  auto body_save = env.notes.save(stale);
+  // Must not succeed in clearing trash. Conflict or preserving trash is OK;
+  // resurrection (active row / missing from trash list) is the bug.
+  auto loaded = env.notes.load(saved.id);
+  require(loaded.has_value(), "row still present");
+  require(loaded.value().is_trashed(), "stale save must not clear trash");
+  require(loaded.value().trashed_at_ms == trashed_at, "trashed_at preserved");
+  require(loaded.value().revision == pre_trash_rev + 1,
+          "revision stays post-trash after rejected save");
+
+  auto list = env.notes.list(notes::domain::FolderId{std::string{"root"}});
+  require(list.has_value(), "list ok");
+  for (const auto& s : list.value()) {
+    require(!(s.id == saved.id), "must not reappear in active list");
+  }
+  auto trash_list = env.notes.list_trashed();
+  require(trash_list.has_value() && trash_list.value().size() == 1,
+          "still in trash list");
+  require(trash_list.value()[0].id == saved.id, "trash id");
+
+  require(!body_save.has_value(), "stale pre-trash save rejected");
+  require(body_save.error().kind ==
+              notes::application::ErrorKind::RevisionConflict,
+          "rejected save is revision conflict");
+
+  // Defense in depth: even with post-trash revision, clearing trash via save fails.
+  notes::domain::Note clear_attempt = after_trash.value();
+  clear_attempt.title = "clear trash attempt";
+  clear_attempt.trashed_at_ms = 0;
+  clear_attempt.trashed_from_folder_id = std::nullopt;
+  auto clear_save = env.notes.save(clear_attempt);
+  require(!clear_save.has_value(), "cannot clear trash via save");
+  require(clear_save.error().kind ==
+              notes::application::ErrorKind::ValidationFailed,
+          "clear-via-save is validation failure");
+  auto still = env.notes.load(saved.id);
+  require(still.has_value() && still.value().is_trashed(),
+          "still trashed after clear attempt");
+}
+
 void test_restore_returns_to_prior_folder() {
   Env env("trash-restore.db");
   // Create secondary folder
@@ -189,6 +257,7 @@ void test_restore_fallback_when_folder_gone() {
 int main() {
   try {
     test_trash_hides_from_list_and_search();
+    test_stale_body_save_cannot_resurrect_trashed_note();
     test_restore_returns_to_prior_folder();
     test_purge_requires_trash_and_removes_row();
     test_purge_gc_attachments();

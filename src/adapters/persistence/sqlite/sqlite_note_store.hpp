@@ -26,15 +26,21 @@ public:
   [[nodiscard]] application::Result<std::vector<domain::NoteSummary>>
   list_trashed() const override;
 
+  [[nodiscard]] application::Result<std::vector<domain::NoteId>> all_note_ids()
+      const override;
+
   // CAS: existing.revision must equal note.revision; stored becomes rev+1.
   // Insert requires note.revision == 0 → stored revision 1.
-  // Preserves trash columns from the note value on update/insert.
+  // Refuse clearing trash via save (restore only). Trashed rows keep parked
+  // folder_id / trashed_* from storage even if the caller omits them.
   [[nodiscard]] application::Result<domain::Note> save(
       const domain::Note& note) override;
 
+  // Soft-delete + revision bump so pre-trash body saves fail CAS.
   [[nodiscard]] application::Result<void> trash(
       const domain::NoteId& id, std::int64_t trashed_at_ms) override;
 
+  // Clear trash flags, place in restore_folder_id, bump revision.
   [[nodiscard]] application::Result<domain::Note> restore(
       const domain::NoteId& id,
       const domain::FolderId& restore_folder_id) override;

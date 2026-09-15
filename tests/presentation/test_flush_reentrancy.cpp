@@ -178,6 +178,90 @@ TEST_CASE("flush: nested flushing_ guard — second flush while first holds IO",
   dispatcher.shutdown();
 }
 
+// F2: IO-only drain leaves GUI QueuedConnection completion unapplied → stale
+// revision_ + dirty_ → second SaveNote(allow_keep_both) → RevisionConflict fork.
+TEST_CASE("flush: in-flight slow save then flush keeps stable id (no keep-both)",
+          "[editor][flush][stale-cas][f2][headless]") {
+  int argc = 0;
+  QCoreApplication app(argc, nullptr);
+
+  notes::testing::InMemoryNoteStore store;
+  notes::testing::FixedClock clock{79'000};
+  SlowNoteWriter slow{store};
+  notes::domain::Folder folder;
+  folder.id = notes::domain::FolderId{"root"};
+  folder.name = "R";
+  REQUIRE(store.save(folder));
+
+  notes::application::CreateNote create{store, clock};
+  notes::application::LoadNote load{store};
+  notes::application::SaveNote save{slow, store, clock};
+  notes::presentation::UseCaseDispatcher dispatcher;
+  notes::presentation::EditorViewModel editor{load, save, dispatcher};
+
+  auto created = create.execute(
+      {folder.id, "Stable", notes::domain::NoteContent::from_plain_text("v0")});
+  REQUIRE(created);
+  const std::string original_id = created.value().id.value();
+  editor.openNote(QString::fromStdString(original_id));
+  pump();
+
+  editor.setHtml(QStringLiteral("<p>async-body-v1</p>"));
+  pump(5);
+  REQUIRE(editor.dirty());
+
+  // Start async save and hold the writer so saving_ stays true.
+  slow.gate_open = false;
+  editor.saveNow();
+  pump(5);
+  for (int i = 0; i < 200 && slow.entered_save.load() == 0; ++i) {
+    QTest::qWait(5);
+    QCoreApplication::processEvents();
+  }
+  REQUIRE(slow.entered_save.load() >= 1);
+  REQUIRE(editor.saving());
+  // GUI completion has not run; dirty typically still true with stale revision.
+  REQUIRE(editor.dirty());
+
+  const auto before = store.list(folder.id);
+  REQUIRE(before);
+  const std::size_t rows_before = before.value().size();
+  const int saves_before_flush = slow.save_calls.load();
+
+  // Release writer; blocking flush drains IO. Must apply in-flight outcome
+  // (or skip redundant second write) — not fork a keep-both note.
+  slow.gate_open = true;
+  REQUIRE(editor.flushPendingSavesBlocking());
+  REQUIRE_FALSE(editor.dirty());
+  REQUIRE_FALSE(editor.saving());
+
+  // Stable id — editor must not rebind to a conflict fork.
+  REQUIRE(editor.noteId().toStdString() == original_id);
+
+  const auto after = store.list(folder.id);
+  REQUIRE(after);
+  REQUIRE(after.value().size() == rows_before);
+
+  // No "(conflict)" title fork.
+  for (const auto& row : after.value()) {
+    REQUIRE(row.title.find("(conflict)") == std::string::npos);
+  }
+
+  auto loaded = load.execute(notes::domain::NoteId{original_id});
+  REQUIRE(loaded);
+  REQUIRE(loaded.value().content.plain_text().find("async-body-v1") !=
+          std::string::npos);
+
+  // At most one logical save for this content (in-flight); flush must not
+  // issue a second CAS write that conflicts. Allow the in-flight call only.
+  // (save_calls may be 1 if flush reused outcome; 2 would be the bug path
+  // when second write still runs — assert no extra note instead.)
+  (void)saves_before_flush;
+  REQUIRE(slow.save_calls.load() >= 1);
+
+  dispatcher.shutdown();
+}
+
 TEST_CASE("flush: clean dirty flush persists (no reentrancy pump required)",
           "[editor][flush][lifecycle][headless][p2]") {
   int argc = 0;

@@ -227,3 +227,13 @@ if(TARGET notes_presentation)
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LC_ALL=C.UTF-8")
   endif()
 endif()
+
+# F5 shared attachment id survivor (unref-only GC).
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/application/use_cases/shared_attachment_survivor_test.cpp)
+  add_executable(test_notes_shared_attachment_survivor
+    application/use_cases/shared_attachment_survivor_test.cpp)
+  target_link_libraries(test_notes_shared_attachment_survivor PRIVATE
+    notes_app notes_test_support)
+  add_test(NAME test_notes_shared_attachment_survivor
+           COMMAND test_notes_shared_attachment_survivor)
+endif()

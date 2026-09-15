@@ -63,6 +63,18 @@ public:
         std::move(out));
   }
 
+  [[nodiscard]] application::Result<std::vector<domain::NoteId>> all_note_ids()
+      const override {
+    std::lock_guard lock(mu_);
+    std::vector<domain::NoteId> out;
+    out.reserve(notes_.size());
+    for (const auto& [id, note] : notes_) {
+      (void)note;
+      out.push_back(id);
+    }
+    return application::Result<std::vector<domain::NoteId>>::ok(std::move(out));
+  }
+
   [[nodiscard]] application::Result<domain::Note> save(
       const domain::Note& note) override {
     std::lock_guard lock(mu_);
@@ -81,7 +93,18 @@ public:
       return application::Result<domain::Note>::fail(
           {application::ErrorKind::RevisionConflict, "CAS failed"});
     }
+    if (it->second.is_trashed() && note.trashed_at_ms <= 0) {
+      return application::Result<domain::Note>::fail(
+          {application::ErrorKind::ValidationFailed,
+           "cannot clear trash via save; use restore"});
+    }
     domain::Note stored = note;
+    if (it->second.is_trashed()) {
+      // Keep parked trash metadata from storage (restore is the only clearer).
+      stored.trashed_at_ms = it->second.trashed_at_ms;
+      stored.trashed_from_folder_id = it->second.trashed_from_folder_id;
+      stored.folder_id = it->second.folder_id;
+    }
     stored.revision = note.revision + 1;
     it->second = stored;
     return application::Result<domain::Note>::ok(stored);
@@ -102,6 +125,7 @@ public:
     it->second.folder_id = domain::FolderId{"root"};
     it->second.trashed_at_ms = trashed_at_ms;
     it->second.modified_at_ms = trashed_at_ms;
+    it->second.revision += 1;
     return application::Result<void>::ok();
   }
 
@@ -129,6 +153,7 @@ public:
     it->second.folder_id = restore_folder_id;
     it->second.trashed_at_ms = 0;
     it->second.trashed_from_folder_id = std::nullopt;
+    it->second.revision += 1;
     return application::Result<domain::Note>::ok(it->second);
   }
 

@@ -160,3 +160,83 @@ TEST_CASE("document position API toggles correct QTextBlock checklist row",
   }
   REQUIRE(found_done);
 }
+
+// F4: endsWith(item.text) is non-unique — items ["a","ba"] with block "[ ] ba"
+// must toggle "ba", not the earlier suffix match on "a".
+TEST_CASE("document position API: suffix-colliding checklist texts toggle exact item",
+          "[editor][checklist][qml-coords][suffix-collision][f4]") {
+  int argc = 0;
+  QCoreApplication app(argc, nullptr);
+
+  notes::testing::InMemoryNoteStore store;
+  notes::testing::FixedClock clock{52'000};
+  notes::domain::Folder folder;
+  folder.id = notes::domain::FolderId{"f"};
+  folder.name = "N";
+  REQUIRE(store.save(folder));
+
+  notes::domain::Note seed;
+  seed.id = notes::domain::NoteId{"note-check-suffix"};
+  seed.folder_id = folder.id;
+  seed.title = "suffix";
+  seed.content = notes::domain::NoteContent{std::vector<notes::domain::ContentBlock>{
+      notes::domain::ChecklistBlock{std::vector<notes::domain::ChecklistItem>{
+          notes::domain::ChecklistItem{false, "a"},
+          notes::domain::ChecklistItem{false, "ba"},
+      }},
+  }};
+  seed.revision = 0;
+  seed.created_at_ms = 1;
+  seed.modified_at_ms = 1;
+  REQUIRE(store.save(seed));
+
+  notes::application::LoadNote load{store};
+  notes::application::SaveNote save{store, store, clock};
+  notes::application::ToggleChecklistItem toggle{store, store, clock};
+  notes::presentation::UseCaseDispatcher dispatcher;
+  notes::presentation::EditorViewModel editor{load, save, dispatcher, &toggle};
+
+  editor.openNote(QString::fromStdString(seed.id.value()));
+  pump();
+
+  QTextDocument doc;
+  doc.setHtml(editor.html());
+  int doc_pos = -1;
+  for (QTextBlock b = doc.begin(); b.isValid(); b = b.next()) {
+    // Target the "ba" row specifically (full line ends with "ba", not just "a").
+    if (b.text() == QStringLiteral("[ ] ba") ||
+        b.text().endsWith(QStringLiteral(" ba")) ||
+        (b.text().contains(QStringLiteral("ba")) &&
+         !b.text().endsWith(QStringLiteral(" a")))) {
+      doc_pos = b.position() + 1;
+      break;
+    }
+  }
+  // Prefer exact block match if the loop above was too loose.
+  if (doc_pos < 0) {
+    for (QTextBlock b = doc.begin(); b.isValid(); b = b.next()) {
+      if (b.text().trimmed() == QStringLiteral("[ ] ba")) {
+        doc_pos = b.position() + 1;
+        break;
+      }
+    }
+  }
+  REQUIRE(doc_pos >= 0);
+
+  REQUIRE(editor.toggleChecklistAtDocumentPosition(doc_pos));
+  pump(80);
+
+  auto loaded = store.load(seed.id);
+  REQUIRE(loaded);
+  const auto* check = std::get_if<notes::domain::ChecklistBlock>(
+      &loaded.value().content.blocks().at(0));
+  REQUIRE(check != nullptr);
+  REQUIRE(check->items().size() == 2);
+  // "a" must remain unchecked; "ba" must be the toggled item.
+  REQUIRE_FALSE(check->items().at(0).done);
+  REQUIRE(check->items().at(0).text == "a");
+  REQUIRE(check->items().at(1).done);
+  REQUIRE(check->items().at(1).text == "ba");
+
+  dispatcher.shutdown();
+}

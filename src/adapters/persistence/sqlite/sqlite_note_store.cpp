@@ -128,6 +128,26 @@ SqliteNoteStore::list_trashed() const {
       std::move(out));
 }
 
+application::Result<std::vector<domain::NoteId>> SqliteNoteStore::all_note_ids()
+    const {
+  Stmt st(db_->handle(), "SELECT id FROM notes");
+  if (!st.valid()) {
+    return application::Result<std::vector<domain::NoteId>>::fail(
+        {application::ErrorKind::StorageFailure, db_->last_error()});
+  }
+  std::vector<domain::NoteId> out;
+  while (true) {
+    const int rc = st.step();
+    if (rc == SQLITE_DONE) break;
+    if (rc != SQLITE_ROW) {
+      return application::Result<std::vector<domain::NoteId>>::fail(
+          {application::ErrorKind::StorageFailure, db_->last_error()});
+    }
+    out.emplace_back(st.column_text(0));
+  }
+  return application::Result<std::vector<domain::NoteId>>::ok(std::move(out));
+}
+
 application::Result<domain::Note> SqliteNoteStore::save(
     const domain::Note& note) {
   auto begin = db_->begin_immediate();
@@ -135,7 +155,9 @@ application::Result<domain::Note> SqliteNoteStore::save(
     return application::Result<domain::Note>::fail(begin.error());
   }
 
-  Stmt sel(db_->handle(), "SELECT revision FROM notes WHERE id=?");
+  Stmt sel(db_->handle(),
+           "SELECT revision, trashed_at, trashed_from_folder_id, folder_id "
+           "FROM notes WHERE id=?");
   if (!sel.valid()) {
     (void)db_->rollback();
     return application::Result<domain::Note>::fail(
@@ -147,10 +169,30 @@ application::Result<domain::Note> SqliteNoteStore::save(
 
   if (src == SQLITE_ROW) {
     const auto current_rev = sel.column_int64(0);
+    const auto current_trashed_at = sel.column_int64(1);
     if (current_rev != note.revision) {
       (void)db_->rollback();
       return application::Result<domain::Note>::fail(
           {application::ErrorKind::RevisionConflict, "CAS failed"});
+    }
+    // Trash is durable: only restore() may clear soft-delete columns. A stale
+    // editor body-save with trashed_at_ms=0 must not resurrect the note.
+    if (current_trashed_at > 0 && note.trashed_at_ms <= 0) {
+      (void)db_->rollback();
+      return application::Result<domain::Note>::fail(
+          {application::ErrorKind::ValidationFailed,
+           "cannot clear trash via save; use restore"});
+    }
+    // When the row is trashed, pin trash metadata from storage so callers
+    // cannot partially corrupt park state even with matching revision.
+    if (current_trashed_at > 0) {
+      stored.trashed_at_ms = current_trashed_at;
+      if (!sel.column_is_null(2) && !sel.column_text(2).empty()) {
+        stored.trashed_from_folder_id = domain::FolderId{sel.column_text(2)};
+      } else {
+        stored.trashed_from_folder_id = std::nullopt;
+      }
+      stored.folder_id = domain::FolderId{sel.column_text(3)};
     }
     stored.revision = note.revision + 1;
     Stmt upd(db_->handle(),
@@ -163,15 +205,16 @@ application::Result<domain::Note> SqliteNoteStore::save(
           {application::ErrorKind::StorageFailure, db_->last_error()});
     }
     const auto body = encode_content(note.content);
-    upd.bind_text(1, note.folder_id.value());
+    upd.bind_text(1, stored.folder_id.value());
     upd.bind_text(2, note.title);
     upd.bind_blob(3, body);
     upd.bind_int64(4, note.modified_at_ms);
     upd.bind_int64(5, stored.revision);
     upd.bind_int64(6, note.pinned ? 1 : 0);
-    upd.bind_int64(7, note.trashed_at_ms);
-    if (note.trashed_from_folder_id && !note.trashed_from_folder_id->empty()) {
-      upd.bind_text(8, note.trashed_from_folder_id->value());
+    upd.bind_int64(7, stored.trashed_at_ms);
+    if (stored.trashed_from_folder_id &&
+        !stored.trashed_from_folder_id->empty()) {
+      upd.bind_text(8, stored.trashed_from_folder_id->value());
     } else {
       upd.bind_null(8);
     }
@@ -297,10 +340,12 @@ application::Result<void> SqliteNoteStore::trash(const domain::NoteId& id,
   }
 
   // Park under root so the prior folder can still be deleted without orphans;
-  // list/search already exclude trashed_at>0.
+  // list/search already exclude trashed_at>0. Bump revision so in-flight body
+  // saves holding the pre-trash revision fail CAS instead of resurrecting.
   Stmt upd(db_->handle(),
            "UPDATE notes SET trashed_at=?, trashed_from_folder_id=?, "
-           "folder_id='root', modified_at=? WHERE id=? AND trashed_at=0");
+           "folder_id='root', modified_at=?, revision=revision+1 "
+           "WHERE id=? AND trashed_at=0");
   if (!upd.valid()) {
     (void)db_->rollback();
     return fail_storage(*db_);
@@ -363,10 +408,13 @@ application::Result<domain::Note> SqliteNoteStore::restore(
         {application::ErrorKind::NotFound, "restore folder not found"});
   }
 
+  // Explicit restore path: clear trash columns and bump revision so any stale
+  // pre-restore snapshot cannot race the restored row via CAS.
   Stmt upd(db_->handle(),
            "UPDATE notes SET folder_id=?, trashed_at=0, "
            "trashed_from_folder_id=NULL, "
-           "modified_at=CAST(strftime('%s','now') AS INTEGER)*1000 "
+           "modified_at=CAST(strftime('%s','now') AS INTEGER)*1000, "
+           "revision=revision+1 "
            "WHERE id=? AND trashed_at>0");
   if (!upd.valid()) {
     (void)db_->rollback();

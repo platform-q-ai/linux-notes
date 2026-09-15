@@ -19,16 +19,15 @@ namespace notes::application {
 
 // Application owns timestamps, revision bump, and keep-both on RevisionConflict.
 //
-// Attachment lifetime policy (keep-both):
-// When allow_keep_both forks a note that references attachment blobs, those
-// AttachmentRefBlock ids are deep-copied through AttachmentStore (get + put)
-// onto the new note. Each note therefore owns distinct blob ids. PurgeNote and
-// removeAttachment may delete blobs referenced by the note being removed
-// without destroying the survivor's attachments. This is preferred over a
-// durable refcount table (out of scope) and over "never delete" retention.
+// Attachment lifetime policy:
+// - keep-both: AttachmentRefBlock ids are deep-copied through AttachmentStore
+//   (get + put) onto the forked note so each note owns distinct blob ids when
+//   the store is wired.
+// - shared-id residual (paste / degraded keep-both without store): PurgeNote
+//   and removeAttachment use UnrefAttachment — scan other notes and delete
+//   blobs only when unrefe'd. Prefer unref-only GC over a durable refcount table.
 // If AttachmentStore is not wired, keep-both still forks the note row but
-// attachment ids remain shared (test-only / degraded); production composition
-// always supplies the store.
+// attachment ids remain shared; production composition always supplies the store.
 class SaveNote {
 public:
   // id_source optional: when null, a process CSPRNG token is used (restart/multi-

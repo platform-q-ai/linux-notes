@@ -1,5 +1,6 @@
 #include "presentation/qt/view_models/editor_view_model.hpp"
 
+#include "application/use_cases/attachments/unref_attachment.hpp"
 #include "presentation/qt/view_models/error_text.hpp"
 
 #include <QCoreApplication>
@@ -385,8 +386,10 @@ bool EditorViewModel::toggleChecklistAtDocumentPosition(int documentPosition) {
     return false;
   }
 
-  // Prefer matching the visible checklist line text (stable across HTML
-  // round-trips) then fall back to QTextBlock ordinal walk.
+  // Prefer exact full-line equality against the visible checklist marker line
+  // (stable across HTML round-trips). Suffix/endsWith matching is intentionally
+  // rejected: items ["a","ba"] with block "[ ] ba" must not hit endsWith("a").
+  // Fall back to QTextBlock ordinal walk when no exact line match exists.
   const QString block_text = block.text();
   int domain_block_index = 0;
   for (const auto& cblock : content.blocks()) {
@@ -396,7 +399,7 @@ bool EditorViewModel::toggleChecklistAtDocumentPosition(int documentPosition) {
         const QString line =
             (items[i].done ? QStringLiteral("[x] ") : QStringLiteral("[ ] ")) +
             QString::fromStdString(items[i].text);
-        if (block_text == line || block_text.endsWith(QString::fromStdString(items[i].text))) {
+        if (block_text == line) {
           toggleChecklistItem(domain_block_index, static_cast<int>(i));
           return true;
         }
@@ -672,11 +675,13 @@ void EditorViewModel::removeAttachment(const QString& attachmentId) {
           return;
         }
         self->applyLoadedNote(result.value().saved, true);
-        // Best-effort blob cleanup after note save; orphan GC is purge path.
-        // Store seam re-validates id + containment (defense in depth).
+        // Unref-only blob cleanup: other notes may still share this opaque id
+        // (paste / degraded keep-both). Never delete while any note references it.
         if (self->attachment_store_) {
-          (void)self->attachment_store_->remove(
-              domain::AttachmentId{att_id.toStdString()});
+          application::UnrefAttachment unref{self->load_note_.reader(),
+                                             *self->attachment_store_};
+          (void)unref.execute(domain::AttachmentId{att_id.toStdString()},
+                              domain::NoteId{expected.toStdString()});
         }
         emit self->attachmentChanged();
       });
@@ -987,10 +992,46 @@ bool EditorViewModel::flushPendingSavesBlocking() {
     ~FlushGuard() { flag = false; }
   } guard{flushing_};
 
+  // Capture whether an async save was in flight before the IO-only drain.
+  // runBlocking waits for the worker to finish SaveNote but does NOT deliver
+  // the GUI QueuedConnection completion — revision_/dirty_ stay stale unless
+  // we reconcile here (without processEvents(AllEvents)).
+  const bool was_saving = saving_;
   if (saving_) {
     // Drain the IO strand only. Do NOT process user-input / QML events here —
     // AllEvents re-entrancy caused nested close/switch mid-flush.
     dispatcher_.runBlocking([] {});
+  }
+
+  if (was_saving && !note_id_.isEmpty() && !noteTrashed()) {
+    application::Result<domain::Note> loaded =
+        application::Result<domain::Note>::fail(
+            {application::ErrorKind::StorageFailure, "flush reload skipped"});
+    const domain::NoteId id{note_id_.toStdString()};
+    dispatcher_.runBlocking([this, &loaded, id]() {
+      loaded = load_note_.execute(id);
+    });
+    if (loaded) {
+      const domain::Note& note = loaded.value();
+      // Always refresh CAS base so any follow-up write uses the store head.
+      if (revision_ != note.revision) {
+        revision_ = note.revision;
+        emit revisionChanged();
+      }
+      pinned_ = note.pinned;
+      created_at_ms_ = note.created_at_ms;
+      assignTrashMetadata(note);
+      // If editor content already matches the persisted note, the in-flight
+      // save committed our snapshot — clear dirty and skip a second SaveNote
+      // that would otherwise RevisionConflict → spurious keep-both.
+      const domain::NoteContent editor_content = contentFromEditor();
+      if (editor_content.plain_text() == note.content.plain_text()) {
+        last_saved_html_ = html_;
+        setDirty(false);
+        queued_resave_ = false;
+      }
+    }
+    setSaving(false);
   }
 
   if (!dirty_) {
@@ -999,6 +1040,8 @@ bool EditorViewModel::flushPendingSavesBlocking() {
     return error_.isEmpty();
   }
 
+  // Dirty remains only when the editor diverged after the in-flight snapshot
+  // (or there was no in-flight save). revision_ is store-fresh when was_saving.
   application::SaveNote::Request req;
   req.note = noteSnapshot();
   req.allow_keep_both = true;

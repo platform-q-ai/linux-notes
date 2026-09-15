@@ -17,6 +17,10 @@ public:
     return reader_.load(id);
   }
 
+  // Exposed for attachment unref/GC that must scan other notes.
+  [[nodiscard]] NoteReader& reader() noexcept { return reader_; }
+  [[nodiscard]] const NoteReader& reader() const noexcept { return reader_; }
+
 private:
   NoteReader& reader_;
 };

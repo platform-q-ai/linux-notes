@@ -36,10 +36,23 @@ Prefer a **consistent** snapshot. Pick one of the following.
    `attachments/`:
 
 ```bash
-# Example archive — whole data dir catches db + WAL/SHM + attachment blobs
-tar -czf linux-notes-backup-$(date -u +%Y%m%dT%H%M%SZ).tar.gz \
-  -C "${XDG_DATA_HOME:-$HOME/.local/share}" linux-notes \
-  -C "${XDG_CONFIG_HOME:-$HOME/.config}" linux-notes 2>/dev/null || true
+# Example archive — whole data dir catches db + WAL/SHM + attachment blobs.
+# Require the data directory; add config only when it exists. Never swallow tar
+# failures (no `|| true`) — an empty archive must not look like success.
+set -euo pipefail
+data_root="${XDG_DATA_HOME:-$HOME/.local/share}"
+config_root="${XDG_CONFIG_HOME:-$HOME/.config}"
+archive="linux-notes-backup-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
+# Fail closed if the data tree is missing or unreadable.
+test -d "${data_root}/linux-notes"
+tar_args=(-C "${data_root}" linux-notes)
+# Optional config: include only when present (common before first settings write).
+if [ -d "${config_root}/linux-notes" ]; then
+  tar_args+=(-C "${config_root}" linux-notes)
+fi
+tar -czf "${archive}" "${tar_args[@]}"
+# Integrity: archive must list notes.db (catches empty/truncated outputs).
+tar -tzf "${archive}" | grep -q 'notes\.db'
 ```
 
 After a clean quit, `-wal`/`-shm` are often absent or empty; still archive the

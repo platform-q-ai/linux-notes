@@ -3,6 +3,7 @@
 #include "application/ports/notes/note_reader.hpp"
 #include "application/ports/notes/note_writer.hpp"
 #include "application/result.hpp"
+#include "application/use_cases/attachments/unref_attachment.hpp"
 #include "domain/notes/note_content.hpp"
 #include "domain/notes/note_id.hpp"
 
@@ -12,7 +13,7 @@
 namespace notes::application {
 
 // Permanent delete: requires note already trashed (deliberate two-step).
-// Removes attachment blobs referenced by the note content when store provided.
+// Attachment GC is unref-only: blobs still referenced by other notes survive.
 class PurgeNote {
 public:
   PurgeNote(NoteReader& reader, NoteWriter& writer,
@@ -43,9 +44,10 @@ public:
     auto removed = writer_.remove(id);
     if (!removed) return removed;
     if (attachments_ != nullptr) {
+      UnrefAttachment unref{reader_, *attachments_};
       for (const auto& aid : attachment_ids) {
-        // Best-effort GC: note row is already gone; log via ignored failures.
-        (void)attachments_->remove(domain::AttachmentId{aid});
+        // Best-effort unref GC: note row is already gone (exclude_note_id=id).
+        (void)unref.execute(domain::AttachmentId{aid}, id);
       }
     }
     return Result<void>::ok();

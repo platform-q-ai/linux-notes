@@ -76,6 +76,9 @@ v_presentation_sqlite() {
 v_domain_sqlite() {
   printf '%s\n' '#include <sqlite3.h>' >"$1/src/domain/bad_sql.hpp"
 }
+v_application_sqlite() {
+  printf '%s\n' '#include <sqlite3.h>' >"$1/src/application/bad_sql.hpp"
+}
 v_domain_fstream() {
   printf '%s\n' '#include <fstream>' >"$1/src/domain/bad_io.hpp"
 }
@@ -92,6 +95,7 @@ expect_violation "application-qt-include" v_application_qt
 expect_violation "adapter-use-case-include" v_adapter_use_case
 expect_violation "presentation-sqlite-include" v_presentation_sqlite
 expect_violation "domain-sqlite-include" v_domain_sqlite
+expect_violation "application-sqlite-include" v_application_sqlite
 expect_violation "domain-fstream-include" v_domain_fstream
 expect_violation "production-test-fake-ref" v_prod_fakes
 
@@ -99,9 +103,9 @@ echo "== summary: pass=$pass fail=$fail =="
 if [[ "$fail" -ne 0 ]]; then
   exit 1
 fi
-# sanity: we must have exercised clean + 7 violations
-if [[ "$pass" -lt 8 ]]; then
-  echo "FAIL: expected at least 8 assertions, got pass=$pass"
+# sanity: we must have exercised clean + 8 violations
+if [[ "$pass" -lt 9 ]]; then
+  echo "FAIL: expected at least 9 assertions, got pass=$pass"
   exit 1
 fi
 echo "architecture-violation-tests PASSED"

@@ -19,6 +19,11 @@ public:
   // Trashed notes only, most recently trashed first.
   [[nodiscard]] virtual Result<std::vector<domain::NoteSummary>> list_trashed()
       const = 0;
+
+  // All note ids (active + trashed). Used by attachment unref/GC to scan for
+  // shared blob references before deleting filesystem bytes.
+  [[nodiscard]] virtual Result<std::vector<domain::NoteId>> all_note_ids()
+      const = 0;
 };
 
 }  // namespace notes::application
